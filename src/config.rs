@@ -40,7 +40,11 @@ pub struct Endpoint {
         with = "crate::config::comet_version"
     )]
     pub comet_version: CometVersion,
+
+    #[serde(default)]
+    pub api_key: Option<String>, // Optional API key field
 }
+
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Database {

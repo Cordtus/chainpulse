@@ -41,13 +41,12 @@ pub enum Outcome {
 
 pub async fn run(
     chain_id: chain::Id,
-    compat_mode: CompatMode,
-    ws_url: WebSocketClientUrl,
+    endpoint: Endpoint,
     db: Pool,
     metrics: Metrics,
 ) -> Result<()> {
     loop {
-        let task = collect(&chain_id, compat_mode, &ws_url, &db, &metrics);
+        let task = collect(&chain_id, endpoint.comet_version, &endpoint.url, endpoint.api_key.clone(), &db, &metrics);
 
         match task.await {
             Ok(outcome) => warn!("{outcome}"),
@@ -69,6 +68,7 @@ async fn collect(
     chain_id: &chain::Id,
     compat_mode: CompatMode,
     ws_url: &WebSocketClientUrl,
+    api_key: Option<String>, // Use the specific API key
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {

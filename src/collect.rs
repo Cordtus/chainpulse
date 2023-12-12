@@ -16,6 +16,8 @@ use tendermint_rpc::{
 };
 use tokio::time;
 use tracing::{error, info, warn, Instrument};
+use std::time::Duration;
+use http::header::{HeaderMap, HeaderName, HeaderValue};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -29,6 +31,8 @@ use crate::{
 
 const NEWBLOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const DISCONNECT_AFTER_BLOCKS: usize = 100;
+const MAX_FAILURES: usize = 5; // Maximum number of consecutive failures allowed
+const RECONNECT_DELAY: Duration = Duration::from_secs(300); // 5 minutes delay
 
 #[derive(Copy, Clone, Debug, thiserror::Error)]
 pub enum Outcome {
@@ -43,23 +47,37 @@ pub async fn run(
     chain_id: chain::Id,
     compat_mode: CompatMode,
     ws_url: WebSocketClientUrl,
+    api_key: Option<String>, // API key parameter
     db: Pool,
     metrics: Metrics,
 ) -> Result<()> {
+    // Maximum number of failed connection attempts
+    const MAX_FAILED_ATTEMPTS: u32 = 3;
+    let mut failed_attempts = 0;
+
     loop {
-        let task = collect(&chain_id, compat_mode, &ws_url, &db, &metrics);
+        let task = collect(&chain_id, compat_mode, &ws_url, &api_key, &db, &metrics);
 
         match task.await {
-            Ok(outcome) => warn!("{outcome}"),
+            Ok(outcome) => {
+                warn!("{outcome}");
+                failed_attempts = 0; // Reset failed attempts on success
+            },
             Err(e) => {
                 metrics.chainpulse_errors(&chain_id);
+                error!("{e}");
 
-                error!("{e}")
+                failed_attempts += 1;
+                if failed_attempts >= MAX_FAILED_ATTEMPTS {
+                    // Wait for 5 minutes after max failed attempts
+                    error!("Maximum failed attempts reached. Waiting for 5 minutes before retrying...");
+                    time::sleep(Duration::from_secs(300)).await;
+                    failed_attempts = 0;
+                }
             }
         }
 
         metrics.chainpulse_reconnects(&chain_id);
-
         info!("Reconnecting in 5 seconds...");
         time::sleep(Duration::from_secs(5)).await;
     }
@@ -69,11 +87,23 @@ async fn collect(
     chain_id: &chain::Id,
     compat_mode: CompatMode,
     ws_url: &WebSocketClientUrl,
+    api_key: &Option<String>,
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {
     info!("Connecting to {ws_url}...");
+
+    // Create custom headers if API key is provided
+    let mut headers = HeaderMap::new();
+    if let Some(key) = api_key {
+        headers.insert(
+            HeaderName::from_static("x-api-key"), // Adjust the header name as needed
+            HeaderValue::from_str(key)?,
+        );
+    }
+
     let (client, driver) = WebSocketClient::builder(ws_url.clone())
+        .with_headers(headers) // Add custom headers
         .compat_mode(compat_mode)
         .build()
         .await?;

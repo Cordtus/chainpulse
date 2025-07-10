@@ -85,6 +85,8 @@ async fn collect(chain_id: chain::Id, endpoint: Endpoint, pool: SqlitePool, metr
         chain_id,
         endpoint.comet_version,
         endpoint.url,
+        endpoint.username,
+        endpoint.password,
         pool,
         metrics,
     )

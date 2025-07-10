@@ -11,6 +11,13 @@ comet_version = "0.34"
 url = "wss://rpc.osmosis.zone/websocket"
 comet_version = "0.34"
 
+# Example chain with authentication
+# [chains.private-chain]
+# url = "wss://private-rpc.example.com/websocket"
+# comet_version = "0.34"
+# username = "your-username"
+# password = "your-password"
+
 [database]
 # Path to the SQLite database file where the metrics will be stored.
 path = "chainpulse.db"

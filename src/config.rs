@@ -40,6 +40,12 @@ pub struct Endpoint {
         with = "crate::config::comet_version"
     )]
     pub comet_version: CometVersion,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

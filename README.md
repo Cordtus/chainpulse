@@ -55,6 +55,18 @@ port    = 3000
 
 Note: The `comet_version` field is optional and defaults to "0.34".
 
+### Authentication
+
+If your RPC endpoint requires authentication, you can provide username and password:
+
+```toml
+[chains.private-chain]
+url = "wss://private-rpc.example.com/websocket"
+comet_version = "0.34"
+username = "your-username"
+password = "your-password"
+```
+
 ## Usage
 
 ```

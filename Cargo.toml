@@ -31,3 +31,4 @@ tokio              = { version = "1", features = ["full"] }
 toml               = "0.8.0"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+url                = "2.4"

@@ -43,11 +43,21 @@ pub async fn run(
     chain_id: chain::Id,
     compat_mode: CompatMode,
     ws_url: WebSocketClientUrl,
+    username: Option<String>,
+    password: Option<String>,
     db: Pool,
     metrics: Metrics,
 ) -> Result<()> {
     loop {
-        let task = collect(&chain_id, compat_mode, &ws_url, &db, &metrics);
+        let task = collect(
+            &chain_id,
+            compat_mode,
+            &ws_url,
+            &username,
+            &password,
+            &db,
+            &metrics,
+        );
 
         match task.await {
             Ok(outcome) => warn!("{outcome}"),
@@ -69,11 +79,26 @@ async fn collect(
     chain_id: &chain::Id,
     compat_mode: CompatMode,
     ws_url: &WebSocketClientUrl,
+    username: &Option<String>,
+    password: &Option<String>,
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {
     info!("Connecting to {ws_url}...");
-    let (client, driver) = WebSocketClient::builder(ws_url.clone())
+
+    let mut ws_url = ws_url.clone();
+
+    // Add basic auth to the WebSocket URL if credentials are provided
+    if let (Some(user), Some(pass)) = (username, password) {
+        let url_str = ws_url.to_string();
+        if let Ok(mut url) = url::Url::parse(&url_str) {
+            let _ = url.set_username(user);
+            let _ = url.set_password(Some(pass));
+            ws_url = url.to_string().parse()?;
+        }
+    }
+
+    let (client, driver) = WebSocketClient::builder(ws_url)
         .compat_mode(compat_mode)
         .build()
         .await?;

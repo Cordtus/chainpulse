@@ -11,6 +11,7 @@ lto = 'thin'
 
 [dependencies]
 axum               = "0.6"
+base64 = "0.22.1"
 clap               = { version = "4.4", features = ["derive"] }
 ctrlc              = { version = "3.4", features = ["termination"] }
 futures            = "0.3"
@@ -32,3 +33,6 @@ toml               = "0.8.0"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 url                = "2.4"
+
+[dev-dependencies]
+base64 = "0.22.1"

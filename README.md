@@ -67,6 +67,12 @@ username = "your-username"
 password = "your-password"
 ```
 
+**Note**: ChainPulse uses URL-based authentication (e.g., `wss://user:pass@host/websocket`). Some servers may require Basic Authentication headers instead of URL-embedded credentials. If you encounter authentication issues, consider:
+
+1. Using an authenticating proxy (e.g., nginx) that adds the required headers
+2. Checking if your RPC provider supports URL-based authentication
+3. Contributing a patch to the tendermint-rpc library to support custom headers
+
 ## Usage
 
 ```

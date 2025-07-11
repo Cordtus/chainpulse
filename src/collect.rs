@@ -84,18 +84,22 @@ async fn collect(
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {
-    info!("Connecting to {ws_url}...");
-
     let mut ws_url = ws_url.clone();
 
     // Add basic auth to the WebSocket URL if credentials are provided
+    // Note: The tendermint-rpc library currently doesn't support custom headers,
+    // so we use URL-based authentication. Some servers may require Basic Auth headers
+    // instead, in which case you'll need to use a proxy or a patched version of tendermint-rpc.
     if let (Some(user), Some(pass)) = (username, password) {
         let url_str = ws_url.to_string();
         if let Ok(mut url) = url::Url::parse(&url_str) {
             let _ = url.set_username(user);
             let _ = url.set_password(Some(pass));
             ws_url = url.to_string().parse()?;
+            info!("Connecting to {} with authentication", ws_url.to_string().replace(pass, "***"));
         }
+    } else {
+        info!("Connecting to {ws_url}...");
     }
 
     let (client, driver) = WebSocketClient::builder(ws_url)

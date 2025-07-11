@@ -55,6 +55,25 @@ port    = 3000
 
 Note: The `comet_version` field is optional and defaults to "0.34".
 
+### Authentication
+
+ChainPulse supports authentication for private RPC endpoints. You can provide username and password in the configuration:
+
+```toml
+[chains.private-chain]
+url = "wss://private-rpc.example.com/websocket"
+comet_version = "0.34"
+username = "your-username"
+password = "your-password"
+```
+
+ChainPulse implements a custom WebSocket client that supports various authentication methods:
+- **Basic Authentication**: Automatically sends credentials as Basic Auth headers during WebSocket handshake
+- **Bearer Token**: Support for Bearer token authentication (future)
+- **API Key**: Support for custom API key headers (future)
+
+This custom implementation bypasses the limitations of the standard tendermint-rpc library, which doesn't support authentication headers.
+
 ## Usage
 
 ```

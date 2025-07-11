@@ -1,3 +1,6 @@
+# Example configuration for ChainPulse
+# Copy this file to chainpulse.toml and modify as needed
+
 # Chains to monitor, with their chain identifier, Comet/Tendermint version, and the URL of their WebSocket endpoint.
 [chains.cosmoshub-4]
 url = "wss://neutron-rpc.lavenderfive.com/websocket"
@@ -33,3 +36,9 @@ port = 3000
 # where either the source or destination chain is part of the
 # list of chains to monitor.
 stuck_packets = true
+
+# Whether or not to populate metrics on startup
+# by querying the database for the chains which are to be monitored.
+# Populating the metrics on start can take a significant amount of time
+# depending on the size of the database.
+populate_on_start = false

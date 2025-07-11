@@ -4,6 +4,7 @@ pub mod db;
 pub mod metrics;
 pub mod msg;
 pub mod populate;
+pub mod simple_auth_client;
 pub mod status;
 
 use std::path::PathBuf;
@@ -85,6 +86,8 @@ async fn collect(chain_id: chain::Id, endpoint: Endpoint, pool: SqlitePool, metr
         chain_id,
         endpoint.comet_version,
         endpoint.url,
+        endpoint.username,
+        endpoint.password,
         pool,
         metrics,
     )

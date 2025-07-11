@@ -1,1 +1,8 @@
 /*.db*
+/target/
+/.claude/
+/debug_auth
+/chainpulse.local.toml
+*.local.toml
+.env
+.env.local

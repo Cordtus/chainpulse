@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use ibc_proto::cosmos::tx::v1beta1::Tx;
-use prost::Message;
+use prost::Message as ProstMessage;
 use sqlx::SqlitePool;
 use tendermint::{
     block::Height,
@@ -43,11 +43,13 @@ pub async fn run(
     chain_id: chain::Id,
     compat_mode: CompatMode,
     ws_url: WebSocketClientUrl,
+    username: Option<String>,
+    password: Option<String>,
     db: Pool,
     metrics: Metrics,
 ) -> Result<()> {
     loop {
-        let task = collect(&chain_id, compat_mode, &ws_url, &db, &metrics);
+        let task = collect(&chain_id, compat_mode, &ws_url, &username, &password, &db, &metrics);
 
         match task.await {
             Ok(outcome) => warn!("{outcome}"),
@@ -69,25 +71,97 @@ async fn collect(
     chain_id: &chain::Id,
     compat_mode: CompatMode,
     ws_url: &WebSocketClientUrl,
+    username: &Option<String>,
+    password: &Option<String>,
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {
-    info!("Connecting to {ws_url}...");
-    let (client, driver) = WebSocketClient::builder(ws_url.clone())
-        .compat_mode(compat_mode)
-        .build()
-        .await?;
+    // Use custom client if authentication is provided
+    if let (Some(user), Some(pass)) = (username, password) {
+        info!("Using authenticated WebSocket client");
+        
+        let auth_method = crate::simple_auth_client::AuthMethod::Basic {
+            username: user.clone(),
+            password: pass.clone(),
+        };
+        
+        let client = crate::simple_auth_client::SimpleAuthClient::new(
+            ws_url.to_string(),
+            auth_method,
+        );
+        
+        info!("Subscribing to NewBlock events...");
+        let mut subscription = client.subscribe_blocks().await?;
+        
+        info!("Waiting for new blocks...");
+        
+        let mut count: usize = 0;
+        
+        loop {
+            let next_block = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
+            let next_block = match next_block {
+                Ok(next_block) => next_block,
+                Err(_) => {
+                    metrics.chainpulse_timeouts(chain_id);
+                    return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
+                }
+            };
+            
+            count += 1;
+            
+            let Some(block) = next_block else {
+                continue;
+            };
+            
+            let height = block.header.height;
+            info!("New block at height {}", height);
+            
+            // Process transactions in the block
+            for tx in &block.data {
+                metrics.chainpulse_txs(chain_id);
+                
+                let tx = <ibc_proto::cosmos::tx::v1beta1::Tx as ProstMessage>::decode(tx.as_slice())?;
+                let tx_row = insert_tx(db, chain_id, height, &tx).await?;
+                
+                let msgs = tx.body.ok_or("missing tx body")?.messages;
+                
+                for msg in msgs {
+                    let type_url = msg.type_url.clone();
+                    
+                    if let Ok(msg) = Msg::decode(msg) {
+                        if msg.is_ibc() {
+                            info!("    {msg}");
+                            
+                            if msg.is_relevant() {
+                                process_msg(db, chain_id, &tx_row, &type_url, msg, metrics).await?;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if count >= DISCONNECT_AFTER_BLOCKS {
+                return Ok(Outcome::BlockElapsed(count));
+            }
+        }
+    } else {
+        // Use standard WebSocket client for non-authenticated connections
+        info!("Connecting to {ws_url}...");
+        let (client, driver) = WebSocketClient::builder(ws_url.clone())
+            .compat_mode(compat_mode)
+            .build()
+            .await?;
 
-    tokio::spawn(driver.run());
+        tokio::spawn(driver.run());
 
-    info!("Subscribing to NewBlock events...");
-    let mut subscription = client.subscribe(queries::new_block()).await?;
+        info!("Subscribing to NewBlock events...");
+        let mut subscription = client.subscribe(queries::new_block()).await?;
 
-    info!("Waiting for new blocks...");
+        info!("Waiting for new blocks...");
 
-    let mut count: usize = 0;
+        let mut count: usize = 0;
 
-    loop {
+        loop {
         let next_event = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
         let next_event = match next_event {
             Ok(next_event) => next_event,
@@ -124,6 +198,7 @@ async fn collect(
         if count >= DISCONNECT_AFTER_BLOCKS {
             return Ok(Outcome::BlockElapsed(count));
         }
+    }
     }
 }
 

@@ -4,6 +4,7 @@ pub mod db;
 pub mod metrics;
 pub mod msg;
 pub mod populate;
+pub mod simple_auth_client;
 pub mod status;
 
 use std::path::PathBuf;

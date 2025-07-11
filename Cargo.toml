@@ -10,9 +10,12 @@ repository   = "https://github.com/informalsystems/chainpulse"
 lto = 'thin'
 
 [dependencies]
+async-trait = "0.1.88"
+async-tungstenite = { version = "0.29.1", features = ["tokio-runtime", "tokio-rustls-webpki-roots"] }
 axum               = "0.6"
 base64 = "0.22.1"
 clap               = { version = "4.4", features = ["derive"] }
+rustls = { version = "0.23", features = ["ring"] }
 ctrlc              = { version = "3.4", features = ["termination"] }
 futures            = "0.3"
 ibc-proto          = { version = "0.34.1", default-features = false }
@@ -28,7 +31,7 @@ tendermint-proto   = "0.32"
 tendermint-rpc     = { version = "0.32", features = ["websocket-client"] }
 thiserror          = "1"
 time               = "0.3"
-tokio              = { version = "1", features = ["full"] }
+tokio              = { version = "1", features = ["full", "sync"] }
 toml               = "0.8.0"
 tracing            = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }

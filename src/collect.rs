@@ -17,6 +17,8 @@ use tendermint_rpc::{
 use tokio::time;
 use tracing::{error, info, warn, Instrument};
 
+use crate::simple_auth_client::{SimpleAuthClient, AuthMethod};
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 type Pool = SqlitePool;
@@ -84,74 +86,129 @@ async fn collect(
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {
-    let mut ws_url = ws_url.clone();
-
-    // Add basic auth to the WebSocket URL if credentials are provided
-    // Note: The tendermint-rpc library currently doesn't support custom headers,
-    // so we use URL-based authentication. Some servers may require Basic Auth headers
-    // instead, in which case you'll need to use a proxy or a patched version of tendermint-rpc.
+    // Use custom client if authentication is provided
     if let (Some(user), Some(pass)) = (username, password) {
-        let url_str = ws_url.to_string();
-        if let Ok(mut url) = url::Url::parse(&url_str) {
-            let _ = url.set_username(user);
-            let _ = url.set_password(Some(pass));
-            ws_url = url.to_string().parse()?;
-            info!("Connecting to {} with authentication", ws_url.to_string().replace(pass, "***"));
-        }
-    } else {
-        info!("Connecting to {ws_url}...");
-    }
-
-    let (client, driver) = WebSocketClient::builder(ws_url)
-        .compat_mode(compat_mode)
-        .build()
-        .await?;
-
-    tokio::spawn(driver.run());
-
-    info!("Subscribing to NewBlock events...");
-    let mut subscription = client.subscribe(queries::new_block()).await?;
-
-    info!("Waiting for new blocks...");
-
-    let mut count: usize = 0;
-
-    loop {
-        let next_event = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
-        let next_event = match next_event {
-            Ok(next_event) => next_event,
-            Err(_) => {
-                metrics.chainpulse_timeouts(chain_id);
-                return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
-            }
+        info!("Using authenticated WebSocket client");
+        
+        let auth_method = AuthMethod::Basic {
+            username: user.clone(),
+            password: pass.clone(),
         };
-
-        count += 1;
-
-        let Some(Ok(event)) = next_event else {
-            continue;
-        };
-
-        let (chain_id, client, pool, metrics) = (
-            chain_id.clone(),
-            client.clone(),
-            db.clone(),
-            metrics.clone(),
+        
+        let client = SimpleAuthClient::new(
+            ws_url.to_string(),
+            auth_method,
         );
-
-        tokio::spawn(
-            async move {
-                if let Err(e) = on_new_block(client, pool, event, &metrics).await {
-                    metrics.chainpulse_errors(&chain_id);
-
-                    error!("{e}");
+        
+        info!("Subscribing to NewBlock events...");
+        let mut subscription = client.subscribe_blocks().await?;
+        
+        info!("Waiting for new blocks...");
+        
+        let mut count: usize = 0;
+        
+        loop {
+            let next_block = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
+            let next_block = match next_block {
+                Ok(next_block) => next_block,
+                Err(_) => {
+                    metrics.chainpulse_timeouts(chain_id);
+                    return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
+                }
+            };
+            
+            count += 1;
+            
+            let Some(block) = next_block else {
+                continue;
+            };
+            
+            let height = block.header.height;
+            info!("New block at height {}", height);
+            
+            // Process transactions in the block
+            for tx in &block.data {
+                metrics.chainpulse_txs(chain_id);
+                
+                let tx = Tx::decode(tx.as_slice())?;
+                let tx_row = insert_tx(db, chain_id, height, &tx).await?;
+                
+                let msgs = tx.body.ok_or("missing tx body")?.messages;
+                
+                for msg in msgs {
+                    let type_url = msg.type_url.clone();
+                    
+                    if let Ok(msg) = Msg::decode(msg) {
+                        if msg.is_ibc() {
+                            info!("    {msg}");
+                            
+                            if msg.is_relevant() {
+                                process_msg(db, chain_id, &tx_row, &type_url, msg, metrics).await?;
+                            }
+                        }
+                    }
                 }
             }
-            .in_current_span(),
-        );
+            
+            if count >= DISCONNECT_AFTER_BLOCKS {
+                return Ok(Outcome::BlockElapsed(count));
+            }
+        }
+    } else {
+        // Use standard WebSocket client for non-authenticated connections
+        info!("Connecting to {ws_url}...");
+        
+        let (client, driver) = WebSocketClient::builder(ws_url.clone())
+            .compat_mode(compat_mode)
+            .build()
+            .await?;
 
-        if count >= DISCONNECT_AFTER_BLOCKS {
-            return Ok(Outcome::BlockElapsed(count));
+        tokio::spawn(driver.run());
+
+        info!("Subscribing to NewBlock events...");
+        let mut subscription = client.subscribe(queries::new_block()).await?;
+
+        info!("Waiting for new blocks...");
+
+        let mut count: usize = 0;
+
+        loop {
+            let next_event = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
+            let next_event = match next_event {
+                Ok(next_event) => next_event,
+                Err(_) => {
+                    metrics.chainpulse_timeouts(chain_id);
+                    return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
+                }
+            };
+
+            count += 1;
+
+            let Some(Ok(event)) = next_event else {
+                continue;
+            };
+
+            let (chain_id, client, pool, metrics) = (
+                chain_id.clone(),
+                client.clone(),
+                db.clone(),
+                metrics.clone(),
+            );
+
+            tokio::spawn(
+                async move {
+                    if let Err(e) = on_new_block(client, pool, event, &metrics).await {
+                        metrics.chainpulse_errors(&chain_id);
+
+                        error!("{e}");
+                    }
+                }
+                .in_current_span(),
+            );
+
+            if count >= DISCONNECT_AFTER_BLOCKS {
+                return Ok(Outcome::BlockElapsed(count));
+            }
         }
     }
 }

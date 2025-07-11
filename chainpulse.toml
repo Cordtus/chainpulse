@@ -11,6 +11,13 @@ comet_version = "0.34"
 url = "wss://rpc.osmosis.zone/websocket"
 comet_version = "0.34"
 
+# Pacific-1 (Sei) with authentication
+[chains.pacific-1]
+url = "wss://pacific-1-skip-rpc.polkachu.com/websocket"
+comet_version = "0.34"
+username = "skip"
+password = "p01kachu?!"
+
 # Example chain with authentication
 # [chains.private-chain]
 # url = "wss://private-rpc.example.com/websocket"

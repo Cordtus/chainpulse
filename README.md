@@ -57,7 +57,7 @@ Note: The `comet_version` field is optional and defaults to "0.34".
 
 ### Authentication
 
-If your RPC endpoint requires authentication, you can provide username and password:
+ChainPulse supports authentication for private RPC endpoints. You can provide username and password in the configuration:
 
 ```toml
 [chains.private-chain]
@@ -67,11 +67,12 @@ username = "your-username"
 password = "your-password"
 ```
 
-**Note**: ChainPulse uses URL-based authentication (e.g., `wss://user:pass@host/websocket`). Some servers may require Basic Authentication headers instead of URL-embedded credentials. If you encounter authentication issues, consider:
+ChainPulse implements a custom WebSocket client that supports various authentication methods:
+- **Basic Authentication**: Automatically sends credentials as Basic Auth headers during WebSocket handshake
+- **Bearer Token**: Support for Bearer token authentication (future)
+- **API Key**: Support for custom API key headers (future)
 
-1. Using an authenticating proxy (e.g., nginx) that adds the required headers
-2. Checking if your RPC provider supports URL-based authentication
-3. Contributing a patch to the tendermint-rpc library to support custom headers
+This custom implementation bypasses the limitations of the standard tendermint-rpc library, which doesn't support authentication headers.
 
 ## Usage
 

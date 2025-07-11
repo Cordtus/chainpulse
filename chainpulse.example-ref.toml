@@ -1,0 +1,40 @@
+# Example ChainPulse configuration using chain references
+# This example shows how to reference chains by network name from chains.json
+
+# Monitor multiple chains by referencing their network names
+# The "ref:" prefix tells ChainPulse to look up the chain in chains.json
+[chains.osmosis-1]
+url = "ref:osmosis"
+
+[chains.cosmoshub-4]
+url = "ref:cosmoshub"
+
+[chains.neutron-1]
+url = "ref:neutron"
+
+[chains.dydx-mainnet-1]
+url = "ref:dydx"
+
+[chains.noble-1]
+url = "ref:noble"
+
+# You can also override the comet version if needed
+[chains.stride-1]
+url = "ref:stride"
+comet_version = "0.37"  # Override default version
+
+# For chains not in chains.json, you can still specify manually
+[chains.custom-chain]
+url = "wss://custom-rpc.example.com/websocket"
+comet_version = "0.34"
+username = "myuser"
+password = "mypass"
+
+[database]
+path = "chainpulse.db"
+
+[metrics]
+enabled = true
+port = 3003
+populate_on_start = false
+stuck_packets = true

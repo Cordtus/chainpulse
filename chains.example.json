@@ -1,0 +1,28 @@
+{
+  "chains": {
+    "osmosis": {
+      "chain_id": "osmosis-1",
+      "rpc": "https://osmosis-rpc.example.com",
+      "websocket": "wss://osmosis-rpc.example.com/websocket",
+      "username": "your-username",
+      "password": "your-password",
+      "comet_version": "0.34"
+    },
+    "cosmoshub": {
+      "chain_id": "cosmoshub-4",
+      "rpc": "https://cosmoshub-rpc.example.com",
+      "websocket": "wss://cosmoshub-rpc.example.com/websocket",
+      "username": "your-username",
+      "password": "your-password",
+      "comet_version": "0.34"
+    },
+    "neutron": {
+      "chain_id": "neutron-1",
+      "rpc": "https://neutron-rpc.example.com",
+      "websocket": "wss://neutron-rpc.example.com/websocket",
+      "username": "your-username",
+      "password": "your-password",
+      "comet_version": "0.34"
+    }
+  }
+}

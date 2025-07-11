@@ -39,6 +39,7 @@ impl SimpleAuthClient {
         let _ = rustls::crypto::ring::default_provider().install_default();
         
         // Build request with authentication
+        info!("Connecting to WebSocket URL: {}", self.url);
         let mut request = self.url.into_client_request()?;
         
         match &self.auth_method {
@@ -48,16 +49,30 @@ impl SimpleAuthClient {
                     &base64::engine::general_purpose::STANDARD,
                     format!("{}:{}", username, password)
                 );
+                let auth_header = format!("Basic {}", credentials);
+                debug!("Using Basic Auth with username: {}", username);
                 request.headers_mut().insert(
                     "Authorization",
-                    HeaderValue::from_str(&format!("Basic {}", credentials))?,
+                    HeaderValue::from_str(&auth_header)?,
                 );
+                
+                // Add Origin header - some WebSocket servers require this
+                if let Ok(origin) = HeaderValue::from_str(&format!("https://{}", request.uri().host().unwrap_or("localhost"))) {
+                    request.headers_mut().insert("Origin", origin);
+                }
             }
             _ => return Err("Unsupported auth method".into()),
         }
         
         info!("Connecting to WebSocket with authentication...");
-        let (ws_stream, _) = connect_async_with_config(request, None).await?;
+        debug!("Request headers: {:?}", request.headers());
+        
+        let result = connect_async_with_config(request, None).await;
+        match &result {
+            Ok(_) => info!("WebSocket handshake successful"),
+            Err(e) => error!("WebSocket handshake failed: {:?}", e),
+        }
+        let (ws_stream, _) = result?;
         info!("WebSocket connection established");
         
         let (mut write, mut read) = ws_stream.split();

@@ -74,6 +74,31 @@ ChainPulse implements a custom WebSocket client that supports various authentica
 
 This custom implementation bypasses the limitations of the standard tendermint-rpc library, which doesn't support authentication headers.
 
+### Chain References
+
+ChainPulse supports referencing chains by network name from a `chains.json` file. This allows you to configure chains without exposing credentials in your configuration:
+
+```toml
+# Reference chains by network name
+[chains.osmosis-1]
+url = "ref:osmosis"
+
+[chains.cosmoshub-4]
+url = "ref:cosmoshub"
+
+# Override specific settings if needed
+[chains.stride-1]
+url = "ref:stride"
+comet_version = "0.37"
+```
+
+When using `ref:` prefix, ChainPulse will look up the chain details from `chains.json` in the same directory as your config file. The chains.json file should contain endpoint URLs and authentication credentials. 
+
+To set this up:
+1. Copy `chains.example.json` to `chains.json`
+2. Update it with your actual RPC endpoints and credentials
+3. The `chains.json` file is already in `.gitignore` to keep your credentials secure
+
 ## Usage
 
 ```

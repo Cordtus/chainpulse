@@ -6,3 +6,8 @@
 *.local.toml
 .env
 .env.local
+chains.json
+CLAUDE.md
+*.claude
+.cursorrules
+.github/copilot-instructions.md

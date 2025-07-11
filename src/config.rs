@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use serde::{Deserialize, Serialize};
@@ -15,13 +16,116 @@ pub struct Config {
     pub metrics: Metrics,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct RawConfig {
+    pub chains: RawChains,
+    pub database: Database,
+    pub metrics: Metrics,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RawChains {
+    #[serde(flatten)]
+    pub endpoints: BTreeMap<chain::Id, RawEndpoint>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RawEndpoint {
+    pub url: String,
+    #[serde(
+        default = "crate::config::default::comet_version",
+        with = "crate::config::comet_version"
+    )]
+    pub comet_version: CometVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChainsReference {
+    pub chains: BTreeMap<String, ChainInfo>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChainInfo {
+    pub chain_id: String,
+    pub rpc: String,
+    pub websocket: String,
+    pub username: String,
+    pub password: String,
+    #[serde(default = "crate::config::default::comet_version_str")]
+    pub comet_version: String,
+}
+
 impl Config {
     pub fn load<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let content = fs::read_to_string(path)?;
-        let config =
+        let content = fs::read_to_string(&path)?;
+        let raw_config: RawConfig =
             toml::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
-        Ok(config)
+        // Load chains reference if available
+        let chains_ref_path = path.as_ref().parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("chains.json");
+        
+        let chains_ref = if chains_ref_path.exists() {
+            let chains_ref_content = fs::read_to_string(&chains_ref_path)?;
+            Some(serde_json::from_str::<ChainsReference>(&chains_ref_content)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
+        } else {
+            None
+        };
+        
+        // Process chains, expanding references
+        let mut expanded_chains = BTreeMap::new();
+        for (chain_id_str, raw_endpoint) in raw_config.chains.endpoints {
+            if raw_endpoint.url.starts_with("ref:") {
+                let network_name = raw_endpoint.url.strip_prefix("ref:").unwrap();
+                if let Some(ref chains_ref) = chains_ref {
+                    if let Some(chain_info) = chains_ref.chains.get(network_name) {
+                        let url = WebSocketClientUrl::from_str(&chain_info.websocket)
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                        let _default_comet_version = match chain_info.comet_version.as_str() {
+                            "0.37" => CometVersion::V0_37,
+                            _ => CometVersion::V0_34,
+                        };
+                        expanded_chains.insert(chain_id_str, Endpoint {
+                            url,
+                            comet_version: raw_endpoint.comet_version,
+                            username: Some(chain_info.username.clone()),
+                            password: Some(chain_info.password.clone()),
+                        });
+                    } else {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("Unknown chain reference: {}", network_name),
+                        ));
+                    }
+                } else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Chain reference '{}' used but chains.json not found", network_name),
+                    ));
+                }
+            } else {
+                let url = WebSocketClientUrl::from_str(&raw_endpoint.url)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                expanded_chains.insert(chain_id_str, Endpoint {
+                    url,
+                    comet_version: raw_endpoint.comet_version,
+                    username: raw_endpoint.username,
+                    password: raw_endpoint.password,
+                });
+            }
+        }
+        
+        Ok(Config {
+            chains: Chains { endpoints: expanded_chains },
+            database: raw_config.database,
+            metrics: raw_config.metrics,
+        })
     }
 }
 
@@ -70,6 +174,10 @@ mod default {
 
     pub fn comet_version() -> CometVersion {
         CometVersion::V0_34
+    }
+    
+    pub fn comet_version_str() -> String {
+        "0.34".to_string()
     }
 
     pub fn stuck_packets() -> bool {

@@ -1,18 +1,31 @@
 # Example configuration for ChainPulse
 # Copy this file to chainpulse.toml and modify as needed
 
+# Global configuration
+[global]
+# IBC versions supported by this instance
+ibc_versions = ["v1"]  # Will become ["v1", "v2"] when IBC v2 is supported
+
 # Chains to monitor, with their chain identifier, Comet/Tendermint version, and the URL of their WebSocket endpoint.
 [chains.cosmoshub-4]
 url = "wss://neutron-rpc.lavenderfive.com/websocket"
 comet_version = "0.34"
+ibc_version = "v1"  # Per-chain IBC version override
 
 [chains.neutron-1]
 url = "wss://neutron-rpc.lavenderfive.com/websocket"
 comet_version = "0.34"
+# ibc_version defaults to "v1" if not specified
 
 [chains.osmosis-1]
 url = "wss://rpc.osmosis.zone/websocket"
 comet_version = "0.34"
+
+# Future IBC v2 chain example (not implemented yet)
+# [chains.eureka-testnet-1]
+# url = "wss://eureka-rpc.example.com/websocket"
+# comet_version = "0.38"
+# ibc_version = "v2"
 
 # Example chain with authentication
 # [chains.private-chain]

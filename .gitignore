@@ -12,3 +12,5 @@ CLAUDE.md
 .cursorrules
 .github/copilot-instructions.md
 chainpulse-polkachu.toml
+chainpulse-test.toml
+chainpulse-test.db

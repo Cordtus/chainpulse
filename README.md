@@ -122,6 +122,30 @@ $ chainpulse --config chainpulse.toml
 ...
 ```
 
+## API Endpoints
+
+The HTTP server exposes the following REST API endpoints for packet queries:
+
+### Query packets by user address
+```
+GET /api/v1/packets/by-user?address={address}&role={sender|receiver|both}
+```
+
+### Query stuck packets
+```
+GET /api/v1/packets/stuck?min_age_seconds=900
+```
+
+### Get packet details
+```
+GET /api/v1/packets/{chain}/{channel}/{sequence}
+```
+
+### Get channel congestion information
+```
+GET /api/v1/channels/congestion
+```
+
 ## Prometheus Metrics
 
 The built-in HTTP server at `/metrics` exports the following Prometheus metrics:
@@ -146,6 +170,14 @@ ibc_frontrun_counter{chain_id, src_channel, src_port, dst_channel, dst_port, sig
 # HELP ibc_stuck_packets The number of packets stuck on an IBC channel
 # TYPE ibc_stuck_packets gauge
 ibc_stuck_packets{dst_chain,src_chain,src_channel} 1
+
+# HELP ibc_stuck_packets_detailed Detailed stuck packet tracking with user info
+# TYPE ibc_stuck_packets_detailed gauge
+ibc_stuck_packets_detailed{src_chain, dst_chain, src_channel, dst_channel, has_user_data}
+
+# HELP ibc_packet_age_seconds Age of unrelayed packets in seconds
+# TYPE ibc_packet_age_seconds gauge
+ibc_packet_age_seconds{src_chain, dst_chain, channel}
 ```
 
 ### Internal metrics

@@ -485,7 +485,7 @@ struct ChannelCongestion {
 async fn get_packets_by_user(
     State(state): State<ApiState>,
     Query(params): Query<UserPacketsQuery>,
-) -> Result<Json<UserPacketsResponse>, StatusCode> {
+) -> std::result::Result<Json<UserPacketsResponse>, StatusCode> {
     // Validate address format (basic check)
     if params.address.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -580,7 +580,7 @@ async fn get_packets_by_user(
 async fn get_stuck_packets(
     State(state): State<ApiState>,
     Query(params): Query<StuckPacketsQuery>,
-) -> Result<Json<StuckPacketsResponse>, StatusCode> {
+) -> std::result::Result<Json<StuckPacketsResponse>, StatusCode> {
     let query = r#"
         SELECT 
             t.chain as chain_id,
@@ -646,7 +646,7 @@ async fn get_stuck_packets(
 async fn get_packet_details(
     State(state): State<ApiState>,
     Path((chain, channel, sequence)): Path<(String, String, i64)>,
-) -> Result<Json<PacketInfo>, StatusCode> {
+) -> std::result::Result<Json<PacketInfo>, StatusCode> {
     let query = r#"
         SELECT 
             t.chain as chain_id,
@@ -698,7 +698,7 @@ async fn get_packet_details(
 
 async fn get_channel_congestion(
     State(state): State<ApiState>,
-) -> Result<Json<ChannelCongestionResponse>, StatusCode> {
+) -> std::result::Result<Json<ChannelCongestionResponse>, StatusCode> {
     let query = r#"
         SELECT 
             p.src_channel,
@@ -725,15 +725,13 @@ async fn get_channel_congestion(
                     if let Some(amounts) = row.4 {
                         for amount_str in amounts.split(',') {
                             if let Some((denom, amount)) = amount_str.split_once(':') {
-                                if let (Some(denom), Some(amount)) = (denom.into(), amount.into()) {
-                                    total_value.entry(denom)
+                                    total_value.entry(denom.to_string())
                                         .and_modify(|e: &mut String| {
                                             if let (Ok(existing), Ok(new)) = (e.parse::<f64>(), amount.parse::<f64>()) {
                                                 *e = (existing + new).to_string();
                                             }
                                         })
-                                        .or_insert(amount);
-                                }
+                                        .or_insert(amount.to_string());
                             }
                         }
                     }

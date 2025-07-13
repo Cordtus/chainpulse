@@ -1,14 +1,14 @@
 use std::time::Duration;
 
 use sqlx::SqlitePool;
-use tokio::time::{interval, sleep};
+use tokio::time::interval;
 use tracing::{error, info, warn};
 
 use crate::{config::Chains, metrics::Metrics, Result};
 
-pub async fn run(chains: Chains, metrics: Metrics) -> Result<()> {
+pub async fn run(_chains: Chains, _metrics: Metrics) -> Result<()> {
     // Get database path from first chain's config (they all use the same DB)
-    let db_path = if let Some((_, endpoint)) = chains.endpoints.iter().next() {
+    let _db_path = if let Some((_, _endpoint)) = _chains.endpoints.iter().next() {
         // Extract database path from the endpoint's config
         // For now, we'll need to pass the database pool from main.rs
         warn!("Stuck packet monitoring requires database access - will be fully implemented when database pool is passed");

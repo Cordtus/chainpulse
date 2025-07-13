@@ -24,7 +24,7 @@ type Pool = SqlitePool;
 use crate::{
     db::{PacketRow, TxRow},
     metrics::Metrics,
-    msg::Msg,
+    msg::{Msg, UniversalPacketInfo},
 };
 
 const NEWBLOCK_TIMEOUT: Duration = Duration::from_secs(60);
@@ -262,6 +262,9 @@ async fn process_msg(
 
     metrics.chainpulse_packets(chain_id);
 
+    // Extract user data from packet if it's a fungible token transfer
+    let packet_info = UniversalPacketInfo::from_packet(packet);
+
     tracing::debug!(
         "    Packet #{} in tx {} ({}) - {}",
         packet.sequence,
@@ -340,9 +343,10 @@ async fn process_msg(
     let query = r#"
         INSERT OR IGNORE INTO packets
             (tx_id, sequence, src_channel, src_port, dst_channel, dst_port,
-            msg_type_url, signer, effected, effected_signer, effected_tx, created_at)
+            msg_type_url, signer, effected, effected_signer, effected_tx, 
+            sender, receiver, denom, amount, ibc_version, created_at)
         VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     "#;
 
     sqlx::query(query)
@@ -357,6 +361,11 @@ async fn process_msg(
         .bind(existing.is_none())
         .bind(existing.as_ref().map(|row| &row.signer))
         .bind(existing.as_ref().map(|row| row.tx_id))
+        .bind(&packet_info.sender)
+        .bind(&packet_info.receiver)
+        .bind(&packet_info.denom)
+        .bind(&packet_info.amount)
+        .bind(&packet_info.ibc_version)
         .execute(pool)
         .await?;
 

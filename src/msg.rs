@@ -15,8 +15,80 @@ use ibc_proto::{
 };
 
 use prost::Message;
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
+
+/// IBC Fungible Token Transfer packet data structure
+/// This structure is standard across IBC v1 and will have a compatibility layer in IBC v2
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FungibleTokenPacketData {
+    pub denom: String,
+    pub amount: String,
+    pub sender: String,
+    pub receiver: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+/// Enhanced packet info that works for both IBC v1 and future v2
+#[derive(Debug, Clone)]
+pub struct UniversalPacketInfo {
+    pub sequence: u64,
+    pub source_channel: String,
+    pub destination_channel: String,
+    pub source_port: String,
+    pub destination_port: String,
+    pub timeout_timestamp: Option<u64>,
+    pub timeout_height: Option<ibc_proto::ibc::core::client::v1::Height>,
+    
+    // User data (when available)
+    pub sender: Option<String>,
+    pub receiver: Option<String>,
+    pub amount: Option<String>,
+    pub denom: Option<String>,
+    pub transfer_memo: Option<String>,
+    
+    // Version info for future compatibility
+    pub ibc_version: String, // "v1" or "v2"
+}
+
+impl UniversalPacketInfo {
+    /// Extract user data from a packet if it's a fungible token transfer
+    pub fn from_packet(packet: &Packet) -> Self {
+        let (sender, receiver, denom, amount, transfer_memo) = 
+            if packet.source_port == "transfer" {
+                match serde_json::from_slice::<FungibleTokenPacketData>(&packet.data) {
+                    Ok(ft_data) => (
+                        Some(ft_data.sender),
+                        Some(ft_data.receiver),
+                        Some(ft_data.denom),
+                        Some(ft_data.amount),
+                        Some(ft_data.memo),
+                    ),
+                    Err(_) => (None, None, None, None, None),
+                }
+            } else {
+                (None, None, None, None, None)
+            };
+
+        Self {
+            sequence: packet.sequence,
+            source_channel: packet.source_channel.clone(),
+            destination_channel: packet.destination_channel.clone(),
+            source_port: packet.source_port.clone(),
+            destination_port: packet.destination_port.clone(),
+            timeout_timestamp: if packet.timeout_timestamp == 0 { None } else { Some(packet.timeout_timestamp) },
+            timeout_height: packet.timeout_height.clone(),
+            sender,
+            receiver,
+            amount,
+            denom,
+            transfer_memo,
+            ibc_version: "v1".to_string(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum Msg {
@@ -206,5 +278,117 @@ impl fmt::Display for Msg {
                 write!(f, "Unhandled msg: {}", msg.type_url)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_parse_fungible_token_packet_data() {
+        let data = r#"{
+            "denom": "uosmo",
+            "amount": "1000000",
+            "sender": "osmo1sender123",
+            "receiver": "cosmos1receiver456",
+            "memo": "test transfer"
+        }"#;
+        
+        let parsed: FungibleTokenPacketData = serde_json::from_str(data).unwrap();
+        
+        assert_eq!(parsed.denom, "uosmo");
+        assert_eq!(parsed.amount, "1000000");
+        assert_eq!(parsed.sender, "osmo1sender123");
+        assert_eq!(parsed.receiver, "cosmos1receiver456");
+        assert_eq!(parsed.memo, "test transfer");
+    }
+    
+    #[test]
+    fn test_parse_fungible_token_packet_data_no_memo() {
+        let data = r#"{
+            "denom": "uatom",
+            "amount": "5000000",
+            "sender": "cosmos1sender789",
+            "receiver": "osmo1receiver012"
+        }"#;
+        
+        let parsed: FungibleTokenPacketData = serde_json::from_str(data).unwrap();
+        
+        assert_eq!(parsed.denom, "uatom");
+        assert_eq!(parsed.amount, "5000000");
+        assert_eq!(parsed.sender, "cosmos1sender789");
+        assert_eq!(parsed.receiver, "osmo1receiver012");
+        assert_eq!(parsed.memo, "");
+    }
+    
+    #[test]
+    fn test_universal_packet_info_from_transfer_packet() {
+        use ibc_proto::ibc::core::channel::v1::Packet;
+        
+        let ft_data = FungibleTokenPacketData {
+            denom: "uosmo".to_string(),
+            amount: "1000000".to_string(),
+            sender: "osmo1sender".to_string(),
+            receiver: "cosmos1receiver".to_string(),
+            memo: "test".to_string(),
+        };
+        
+        let packet = Packet {
+            sequence: 123,
+            source_port: "transfer".to_string(),
+            source_channel: "channel-0".to_string(),
+            destination_port: "transfer".to_string(),
+            destination_channel: "channel-141".to_string(),
+            data: serde_json::to_vec(&ft_data).unwrap(),
+            timeout_height: None,
+            timeout_timestamp: 1234567890,
+        };
+        
+        let info = UniversalPacketInfo::from_packet(&packet);
+        
+        assert_eq!(info.sequence, 123);
+        assert_eq!(info.source_channel, "channel-0");
+        assert_eq!(info.destination_channel, "channel-141");
+        assert_eq!(info.source_port, "transfer");
+        assert_eq!(info.destination_port, "transfer");
+        assert_eq!(info.sender, Some("osmo1sender".to_string()));
+        assert_eq!(info.receiver, Some("cosmos1receiver".to_string()));
+        assert_eq!(info.amount, Some("1000000".to_string()));
+        assert_eq!(info.denom, Some("uosmo".to_string()));
+        assert_eq!(info.transfer_memo, Some("test".to_string()));
+        assert_eq!(info.ibc_version, "v1");
+        assert_eq!(info.timeout_timestamp, Some(1234567890));
+    }
+    
+    #[test]
+    fn test_universal_packet_info_from_non_transfer_packet() {
+        use ibc_proto::ibc::core::channel::v1::Packet;
+        
+        let packet = Packet {
+            sequence: 456,
+            source_port: "icahost".to_string(),
+            source_channel: "channel-1".to_string(),
+            destination_port: "icacontroller".to_string(),
+            destination_channel: "channel-2".to_string(),
+            data: vec![1, 2, 3, 4], // Non-JSON data
+            timeout_height: None,
+            timeout_timestamp: 0,
+        };
+        
+        let info = UniversalPacketInfo::from_packet(&packet);
+        
+        assert_eq!(info.sequence, 456);
+        assert_eq!(info.source_channel, "channel-1");
+        assert_eq!(info.destination_channel, "channel-2");
+        assert_eq!(info.source_port, "icahost");
+        assert_eq!(info.destination_port, "icacontroller");
+        assert_eq!(info.sender, None);
+        assert_eq!(info.receiver, None);
+        assert_eq!(info.amount, None);
+        assert_eq!(info.denom, None);
+        assert_eq!(info.transfer_memo, None);
+        assert_eq!(info.ibc_version, "v1");
+        assert_eq!(info.timeout_timestamp, None);
     }
 }

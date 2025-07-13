@@ -9,8 +9,16 @@ use serde::{Deserialize, Serialize};
 use tendermint::chain;
 use tendermint_rpc::{client::CompatMode as CometVersion, WebSocketClientUrl};
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Global {
+    #[serde(default = "default::ibc_versions")]
+    pub ibc_versions: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Config {
+    #[serde(default)]
+    pub global: Global,
     pub chains: Chains,
     pub database: Database,
     pub metrics: Metrics,
@@ -18,6 +26,8 @@ pub struct Config {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct RawConfig {
+    #[serde(default)]
+    pub global: Global,
     pub chains: RawChains,
     pub database: Database,
     pub metrics: Metrics,
@@ -37,6 +47,8 @@ pub struct RawEndpoint {
         with = "crate::config::comet_version"
     )]
     pub comet_version: CometVersion,
+    #[serde(default = "crate::config::default::ibc_version")]
+    pub ibc_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +106,7 @@ impl Config {
                         expanded_chains.insert(chain_id_str, Endpoint {
                             url,
                             comet_version: raw_endpoint.comet_version,
+                            ibc_version: raw_endpoint.ibc_version,
                             username: Some(chain_info.username.clone()),
                             password: Some(chain_info.password.clone()),
                         });
@@ -115,6 +128,7 @@ impl Config {
                 expanded_chains.insert(chain_id_str, Endpoint {
                     url,
                     comet_version: raw_endpoint.comet_version,
+                    ibc_version: raw_endpoint.ibc_version,
                     username: raw_endpoint.username,
                     password: raw_endpoint.password,
                 });
@@ -122,6 +136,7 @@ impl Config {
         }
         
         Ok(Config {
+            global: raw_config.global,
             chains: Chains { endpoints: expanded_chains },
             database: raw_config.database,
             metrics: raw_config.metrics,
@@ -144,6 +159,9 @@ pub struct Endpoint {
         with = "crate::config::comet_version"
     )]
     pub comet_version: CometVersion,
+    
+    #[serde(default = "crate::config::default::ibc_version")]
+    pub ibc_version: String,
     
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
@@ -182,6 +200,14 @@ mod default {
 
     pub fn stuck_packets() -> bool {
         true
+    }
+    
+    pub fn ibc_version() -> String {
+        "v1".to_string()
+    }
+    
+    pub fn ibc_versions() -> Vec<String> {
+        vec!["v1".to_string()]
     }
 }
 

@@ -8,9 +8,9 @@
 
 # Chain Pulse
 
-Collect packets relayed to and from a given blockchain, computing which packets are effected or not and by whom they were relayed.
+Monitor IBC packet flow across Cosmos blockchains. Track which packets get relayed, identify stuck packets, and analyze packet frontrunning patterns.
 
-The collected data is stored in a SQLite database and the metrics are exported to Prometheus.
+Chain Pulse stores all data in SQLite and exports metrics to Prometheus. The built-in REST API provides real-time packet queries for integration with other systems.
 
 ## Installation
 
@@ -51,9 +51,20 @@ path = "data.db"
 [metrics]
 enabled = true
 port    = 3000
+
+# Monitor packets that stay unrelayed for too long
+stuck_packets = true
 ```
 
-Note: The `comet_version` field is optional and defaults to "0.34".
+### Required Fields
+- `url`: WebSocket endpoint for the chain
+- `database.path`: Location for SQLite database
+- `metrics.enabled`: Enable Prometheus metrics and API endpoints
+
+### Optional Fields
+- `comet_version`: Tendermint/CometBFT version (defaults to "0.34")
+- `stuck_packets`: Enable monitoring of stuck packets (defaults to true)
+- `metrics.port`: Port for metrics and API server (defaults to 3000)
 
 ### Authentication
 
@@ -122,6 +133,76 @@ $ chainpulse --config chainpulse.toml
 ...
 ```
 
+## API Endpoints
+
+Chain Pulse provides REST API endpoints for querying packet data. All endpoints return JSON responses.
+
+### Query Packets by User Address
+Find all packets sent or received by a specific address:
+```
+GET /api/v1/packets/by-user?address={address}&role={role}&limit={limit}&offset={offset}
+```
+
+Parameters:
+- `address` (required): User's blockchain address
+- `role` (optional): Filter by "sender", "receiver", or "both" (default)
+- `limit` (optional): Maximum results to return (default: 100)
+- `offset` (optional): Pagination offset (default: 0)
+
+### Query Stuck Packets
+Find packets that have not been relayed within a time threshold:
+```
+GET /api/v1/packets/stuck?min_age_seconds={seconds}&limit={limit}
+```
+
+Parameters:
+- `min_age_seconds` (optional): Minimum age for stuck packets (default: 900)
+- `limit` (optional): Maximum results to return (default: 100)
+
+### Get Packet Details
+Retrieve detailed information about a specific packet:
+```
+GET /api/v1/packets/{chain}/{channel}/{sequence}
+```
+
+Path parameters:
+- `chain`: Source chain ID
+- `channel`: IBC channel
+- `sequence`: Packet sequence number
+
+### Get Channel Congestion
+View channels with stuck packets and their total value:
+```
+GET /api/v1/channels/congestion
+```
+
+Returns channels sorted by number of stuck packets, including the total value of tokens waiting to be relayed.
+
+## Packet Data Tracking
+
+Chain Pulse tracks detailed information about IBC fungible token transfers:
+
+### Data Collected
+For each IBC transfer packet, Chain Pulse extracts and stores:
+- **Sender**: Source address initiating the transfer
+- **Receiver**: Destination address receiving tokens
+- **Amount**: Token quantity being transferred
+- **Denom**: Token denomination
+- **IBC Version**: Protocol version (v1 or future v2/Eureka)
+
+### Stuck Packet Detection
+Chain Pulse monitors packets continuously and identifies those that remain unrelayed for more than 15 minutes. The stuck packet detector:
+- Runs every 60 seconds
+- Tracks packet age since creation
+- Groups stuck packets by channel
+- Calculates total value stuck on each channel
+
+### Use Cases
+- **Wallet Integration**: Show users their pending IBC transfers
+- **Relayer Monitoring**: Identify channels that need attention
+- **Risk Assessment**: Track value at risk in stuck packets
+- **User Support**: Help users find missing transfers
+
 ## Prometheus Metrics
 
 The built-in HTTP server at `/metrics` exports the following Prometheus metrics:
@@ -146,6 +227,14 @@ ibc_frontrun_counter{chain_id, src_channel, src_port, dst_channel, dst_port, sig
 # HELP ibc_stuck_packets The number of packets stuck on an IBC channel
 # TYPE ibc_stuck_packets gauge
 ibc_stuck_packets{dst_chain,src_chain,src_channel} 1
+
+# HELP ibc_stuck_packets_detailed Detailed stuck packet tracking with user info
+# TYPE ibc_stuck_packets_detailed gauge
+ibc_stuck_packets_detailed{src_chain, dst_chain, src_channel, dst_channel, has_user_data}
+
+# HELP ibc_packet_age_seconds Age of unrelayed packets in seconds
+# TYPE ibc_packet_age_seconds gauge
+ibc_packet_age_seconds{src_chain, dst_chain, channel}
 ```
 
 ### Internal metrics

@@ -38,9 +38,12 @@ async fn main() -> Result<()> {
 
     let (metrics, registry) = Metrics::new();
 
+    let pool = db::connect(&config.database.path).await?;
+    db::setup(&pool).await;
+
     if config.metrics.enabled {
         tokio::spawn(
-            metrics::run(config.metrics.port, registry).instrument(error_span!("metrics")),
+            metrics::run(config.metrics.port, registry, pool.clone()).instrument(error_span!("metrics")),
         );
     }
 
@@ -48,12 +51,9 @@ async fn main() -> Result<()> {
         info!("Monitoring packets stuck on IBC channels");
 
         tokio::spawn(
-            status::run(config.chains.clone(), metrics.clone()).instrument(error_span!("status")),
+            status::stuck_packet_monitor(pool.clone(), metrics.clone()).instrument(error_span!("status")),
         );
     }
-
-    let pool = db::connect(&config.database.path).await?;
-    db::setup(&pool).await;
 
     if config.metrics.enabled && config.metrics.populate_on_start {
         info!("Populating metrics on start");

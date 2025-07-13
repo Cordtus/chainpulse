@@ -30,6 +30,12 @@ pub struct PacketRow {
     pub effected_signer: Option<String>,
     pub effected_tx: Option<i64>,
     pub created_at: PrimitiveDateTime,
+    // User data fields for packet clearing
+    pub sender: Option<String>,
+    pub receiver: Option<String>,
+    pub denom: Option<String>,
+    pub amount: Option<String>,
+    pub ibc_version: Option<String>,
 }
 
 pub async fn connect(path: &Path) -> Result<SqlitePool> {
@@ -82,8 +88,15 @@ pub async fn create_tables(pool: &SqlitePool) {
         sqlx::query(table).execute(pool).await.unwrap();
     }
 
-    const MIGRATIONS: &[&str] =
-        &["ALTER TABLE packets ADD COLUMN effected_tx INTEGER REFERENCES txs (id);"];
+    const MIGRATIONS: &[&str] = &[
+        "ALTER TABLE packets ADD COLUMN effected_tx INTEGER REFERENCES txs (id);",
+        // Add user data columns for packet clearing feature
+        "ALTER TABLE packets ADD COLUMN sender TEXT;",
+        "ALTER TABLE packets ADD COLUMN receiver TEXT;",
+        "ALTER TABLE packets ADD COLUMN denom TEXT;",
+        "ALTER TABLE packets ADD COLUMN amount TEXT;",
+        "ALTER TABLE packets ADD COLUMN ibc_version TEXT DEFAULT 'v1';",
+    ];
 
     for migration in MIGRATIONS {
         run_migration(pool, migration).await;
@@ -106,6 +119,12 @@ async fn create_indexes(pool: &SqlitePool) {
         "CREATE        INDEX IF NOT EXISTS packets_dst_channel ON packets (dst_channel);",
         "CREATE        INDEX IF NOT EXISTS packets_effected    ON packets (effected);",
         "CREATE        INDEX IF NOT EXISTS packets_effected_tx ON packets (effected_tx);",
+        // Indexes for user queries
+        "CREATE        INDEX IF NOT EXISTS packets_sender      ON packets (sender) WHERE sender IS NOT NULL;",
+        "CREATE        INDEX IF NOT EXISTS packets_receiver    ON packets (receiver) WHERE receiver IS NOT NULL;",
+        "CREATE        INDEX IF NOT EXISTS packets_pending_sender ON packets (sender, effected) WHERE effected = 0 AND sender IS NOT NULL;",
+        "CREATE        INDEX IF NOT EXISTS packets_pending_receiver ON packets (receiver, effected) WHERE effected = 0 AND receiver IS NOT NULL;",
+        "CREATE        INDEX IF NOT EXISTS packets_stuck       ON packets (src_channel, dst_channel, effected, created_at) WHERE effected = 0;",
     ];
 
     for index in INDEXES {

@@ -7,7 +7,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tendermint::chain;
-use tendermint_rpc::{client::CompatMode as CometVersion, WebSocketClientUrl};
+pub use tendermint_rpc::client::CompatMode as CometVersion;
+use tendermint_rpc::WebSocketClientUrl;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Global {
@@ -15,9 +16,8 @@ pub struct Global {
     pub ibc_versions: Vec<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Config {
-    #[serde(default)]
     pub global: Global,
     pub chains: Chains,
     pub database: Database,
@@ -42,11 +42,8 @@ pub struct RawChains {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RawEndpoint {
     pub url: String,
-    #[serde(
-        default = "crate::config::default::comet_version",
-        with = "crate::config::comet_version"
-    )]
-    pub comet_version: CometVersion,
+    #[serde(default = "crate::config::default::comet_version_str")]
+    pub comet_version: String,
     #[serde(default = "crate::config::default::ibc_version")]
     pub ibc_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,13 +96,14 @@ impl Config {
                     if let Some(chain_info) = chains_ref.chains.get(network_name) {
                         let url = WebSocketClientUrl::from_str(&chain_info.websocket)
                             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                        let _default_comet_version = match chain_info.comet_version.as_str() {
+                        let comet_compat = match chain_info.comet_version.as_str() {
                             "0.37" => CometVersion::V0_37,
                             _ => CometVersion::V0_34,
                         };
                         expanded_chains.insert(chain_id_str, Endpoint {
                             url,
-                            comet_version: raw_endpoint.comet_version,
+                            comet_version: comet_compat,
+                            version: chain_info.comet_version.clone(),
                             ibc_version: raw_endpoint.ibc_version,
                             username: Some(chain_info.username.clone()),
                             password: Some(chain_info.password.clone()),
@@ -125,9 +123,14 @@ impl Config {
             } else {
                 let url = WebSocketClientUrl::from_str(&raw_endpoint.url)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                let comet_compat = match raw_endpoint.comet_version.as_str() {
+                    "0.37" => CometVersion::V0_37,
+                    _ => CometVersion::V0_34,
+                };
                 expanded_chains.insert(chain_id_str, Endpoint {
                     url,
-                    comet_version: raw_endpoint.comet_version,
+                    comet_version: comet_compat,
+                    version: raw_endpoint.comet_version.clone(),
                     ibc_version: raw_endpoint.ibc_version,
                     username: raw_endpoint.username,
                     password: raw_endpoint.password,
@@ -144,30 +147,26 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Chains {
-    #[serde(flatten)]
     pub endpoints: BTreeMap<chain::Id, Endpoint>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Endpoint {
     pub url: WebSocketClientUrl,
-
-    #[serde(
-        default = "crate::config::default::comet_version",
-        with = "crate::config::comet_version"
-    )]
     pub comet_version: CometVersion,
-    
-    #[serde(default = "crate::config::default::ibc_version")]
+    pub version: String,
     pub ibc_version: String,
-    
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
-    
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+}
+
+impl Endpoint {
+    /// Get the version string for this endpoint
+    pub fn version_string(&self) -> &str {
+        &self.version
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -236,8 +235,10 @@ mod comet_version {
         match version.as_str() {
             "0.37" => Ok(CometVersion::V0_37),
             "0.34" => Ok(CometVersion::V0_34),
+            // 0.38 uses V0_34 as placeholder but we track the real version
+            "0.38" => Ok(CometVersion::V0_34),
             _ => Err(serde::de::Error::custom(format!(
-                "invalid CometBFT version: {}, available: 0.34, 0.37",
+                "invalid CometBFT version: {}, available: 0.34, 0.37, 0.38",
                 version
             ))),
         }

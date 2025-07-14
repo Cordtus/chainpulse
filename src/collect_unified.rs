@@ -10,22 +10,21 @@ use tendermint::{
     crypto::Sha256,
 };
 use tendermint_rpc::{
-    client::CompatMode,
-    event::{Event, EventData},
-    Client, SubscriptionClient, WebSocketClient, WebSocketClientUrl,
+    event::EventData,
+    WebSocketClientUrl,
 };
 use tokio::time;
-use tracing::{error, info, warn, Instrument};
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-
-type Pool = SqlitePool;
+use tracing::{error, info, warn};
 
 use crate::{
+    client::{self, AuthConfig},
     db::{PacketRow, TxRow},
     metrics::Metrics,
     msg::{Msg, UniversalPacketInfo},
 };
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type Pool = SqlitePool;
 
 const NEWBLOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const DISCONNECT_AFTER_BLOCKS: usize = 100;
@@ -39,9 +38,10 @@ pub enum Outcome {
     BlockElapsed(usize),
 }
 
+/// Run unified collector with support for all protocol versions
 pub async fn run(
     chain_id: chain::Id,
-    compat_mode: CompatMode,
+    version: &str,
     ws_url: WebSocketClientUrl,
     username: Option<String>,
     password: Option<String>,
@@ -49,13 +49,12 @@ pub async fn run(
     metrics: Metrics,
 ) -> Result<()> {
     loop {
-        let task = collect(&chain_id, compat_mode, &ws_url, &username, &password, &db, &metrics);
+        let task = collect(&chain_id, version, &ws_url, &username, &password, &db, &metrics);
 
         match task.await {
             Ok(outcome) => warn!("{outcome}"),
             Err(e) => {
                 metrics.chainpulse_errors(&chain_id);
-
                 error!("{e}")
             }
         }
@@ -69,99 +68,32 @@ pub async fn run(
 
 async fn collect(
     chain_id: &chain::Id,
-    compat_mode: CompatMode,
+    version: &str,
     ws_url: &WebSocketClientUrl,
     username: &Option<String>,
     password: &Option<String>,
     db: &Pool,
     metrics: &Metrics,
 ) -> Result<Outcome> {
-    // Use custom client if authentication is provided
-    if let (Some(user), Some(pass)) = (username, password) {
-        info!("Using authenticated WebSocket client");
-        
-        let auth_method = crate::simple_auth_client::AuthMethod::Basic {
+    // Create appropriate client based on version and auth
+    let auth_config = match (username, password) {
+        (Some(user), Some(pass)) => Some(AuthConfig {
             username: user.clone(),
             password: pass.clone(),
-        };
-        
-        let client = crate::simple_auth_client::SimpleAuthClient::new(
-            ws_url.to_string(),
-            auth_method,
-        );
-        
-        info!("Subscribing to NewBlock events...");
-        let mut subscription = client.subscribe_blocks().await?;
-        
-        info!("Waiting for new blocks...");
-        
-        let mut count: usize = 0;
-        
-        loop {
-            let next_block = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
-            let next_block = match next_block {
-                Ok(next_block) => next_block,
-                Err(_) => {
-                    metrics.chainpulse_timeouts(chain_id);
-                    return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
-                }
-            };
-            
-            count += 1;
-            
-            let Some(block) = next_block else {
-                continue;
-            };
-            
-            let height = block.header.height;
-            info!("New block at height {}", height);
-            
-            // Process transactions in the block
-            for tx in &block.data {
-                metrics.chainpulse_txs(chain_id);
-                
-                let tx = <ibc_proto::cosmos::tx::v1beta1::Tx as ProstMessage>::decode(tx.as_slice())?;
-                let tx_row = insert_tx(db, chain_id, height, &tx).await?;
-                
-                let msgs = tx.body.ok_or("missing tx body")?.messages;
-                
-                for msg in msgs {
-                    let type_url = msg.type_url.clone();
-                    
-                    if let Ok(msg) = Msg::decode(msg) {
-                        if msg.is_ibc() {
-                            info!("    {msg}");
-                            
-                            if msg.is_relevant() {
-                                process_msg(db, chain_id, &tx_row, &type_url, msg, metrics).await?;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            if count >= DISCONNECT_AFTER_BLOCKS {
-                return Ok(Outcome::BlockElapsed(count));
-            }
-        }
-    } else {
-        // Use standard WebSocket client for non-authenticated connections
-        info!("Connecting to {ws_url}...");
-        let (client, driver) = WebSocketClient::builder(ws_url.clone())
-            .compat_mode(compat_mode)
-            .build()
-            .await?;
+        }),
+        _ => None,
+    };
 
-        tokio::spawn(driver.run());
-
-        info!("Subscribing to NewBlock events...");
-        let mut subscription = client.subscribe(queries::new_block()).await?;
-
-        info!("Waiting for new blocks...");
-
-        let mut count: usize = 0;
-
-        loop {
+    let client = client::create_client(ws_url, version, auth_config).await?;
+    
+    info!("Subscribing to NewBlock events...");
+    let mut subscription = client.subscribe_blocks().await?;
+    
+    info!("Waiting for new blocks...");
+    
+    let mut count: usize = 0;
+    
+    loop {
         let next_event = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
         let next_event = match next_event {
             Ok(next_event) => next_event,
@@ -170,86 +102,86 @@ async fn collect(
                 return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
             }
         };
-
+        
         count += 1;
-
+        
         let Some(Ok(event)) = next_event else {
             continue;
         };
+        
+        let EventData::NewBlock {
+            block: Some(block), ..
+        } = event.data
+        else {
+            continue;
+        };
 
-        let (chain_id, client, pool, metrics) = (
-            chain_id.clone(),
-            client.clone(),
-            db.clone(),
-            metrics.clone(),
-        );
+        let height = block.header.height;
+        let chain_id_from_block = block.header.chain_id;
 
-        tokio::spawn(
-            async move {
-                if let Err(e) = on_new_block(client, pool, event, &metrics).await {
-                    metrics.chainpulse_errors(&chain_id);
+        info!("New block at height {}", height);
 
-                    error!("{e}");
-                }
-            }
-            .in_current_span(),
-        );
+        // Process transactions
+        for tx in &block.data {
+            metrics.chainpulse_txs(&chain_id_from_block);
 
-        if count >= DISCONNECT_AFTER_BLOCKS {
-            return Ok(Outcome::BlockElapsed(count));
-        }
-    }
-    }
-}
+            let tx = Tx::decode(tx.as_slice())?;
+            let tx_row = insert_tx(db, &chain_id_from_block, height, &tx).await?;
 
-async fn on_new_block(
-    client: WebSocketClient,
-    db: Pool,
-    event: Event,
-    metrics: &Metrics,
-) -> Result<()> {
-    let EventData::NewBlock {
-        block: Some(block), ..
-    } = event.data
-    else {
-        return Ok(());
-    };
+            let msgs = tx.body.ok_or("missing tx body")?.messages;
 
-    let height = block.header.height;
-    let chain_id = block.header.chain_id;
+            for msg in msgs {
+                let type_url = msg.type_url.clone();
 
-    info!("New block at height {}", block.header.height);
+                if let Ok(msg) = Msg::decode(msg) {
+                    if msg.is_ibc() {
+                        info!("    {msg}");
 
-    let block = client.block(height).await?;
-
-    for tx in &block.block.data {
-        metrics.chainpulse_txs(&chain_id);
-
-        let tx = Tx::decode(tx.as_slice())?;
-        let tx_row = insert_tx(&db, &chain_id, height, &tx).await?;
-
-        let msgs = tx.body.ok_or("missing tx body")?.messages;
-
-        for msg in msgs {
-            let type_url = msg.type_url.clone();
-
-            if let Ok(msg) = Msg::decode(msg) {
-                if msg.is_ibc() {
-                    info!("    {msg}");
-
-                    if msg.is_relevant() {
-                        process_msg(&db, &chain_id, &tx_row, &type_url, msg, metrics).await?;
+                        if msg.is_relevant() {
+                            process_msg(db, &chain_id_from_block, &tx_row, &type_url, msg, metrics).await?;
+                        }
                     }
                 }
             }
         }
+        
+        // Try to get events if the client supports it and we're on v0.38
+        if client.supports_events() && version == "0.38" {
+            match client.get_block_results(height).await {
+                Ok(block_results) => {
+                    // Process events for enhanced data extraction
+                    for (tx_idx, tx_result) in block_results.txs_results.iter().enumerate() {
+                        tracing::debug!("TX {} has {} events", tx_idx, tx_result.events.len());
+                        
+                        for event in &tx_result.events {
+                            if event.type_str.contains("packet") || 
+                               event.type_str.contains("ibc") || 
+                               event.type_str.contains("transfer") {
+                                tracing::info!("Event: {} ({} attributes)", 
+                                    event.type_str, event.attributes.len());
+                                
+                                // TODO: Store events in database when ready
+                                for attr in &event.attributes {
+                                    if attr.key.contains("packet") || 
+                                       attr.key == "sender" || 
+                                       attr.key == "receiver" {
+                                        tracing::info!("  {}: {}", attr.key, attr.value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Could not fetch block results: {}", e);
+                }
+            }
+        }
+        
+        if count >= DISCONNECT_AFTER_BLOCKS {
+            return Ok(Outcome::BlockElapsed(count));
+        }
     }
-    
-    // TODO: Event extraction is currently disabled due to protocol incompatibility
-    // between tendermint-rs v0.32 and newer CometBFT chains. This will be enabled
-    // once we implement v0.38 protocol support.
-
-    Ok(())
 }
 
 async fn process_msg(
@@ -266,7 +198,6 @@ async fn process_msg(
 
     metrics.chainpulse_packets(chain_id);
 
-    // Extract user data from packet if it's a fungible token transfer
     let packet_info = UniversalPacketInfo::from_packet(packet);
 
     tracing::debug!(
@@ -412,16 +343,4 @@ async fn insert_tx(db: &Pool, chain_id: &ChainId, height: Height, tx: &Tx) -> Re
             .await?;
 
     Ok(tx)
-}
-
-// TODO: Event insertion functions disabled until v0.38 protocol support is implemented
-// async fn insert_tx_event(db: &Pool, tx_id: i64, event_type: &str, event_index: i64) -> Result<i64>
-// async fn insert_event_attribute(db: &Pool, event_id: i64, key: &str, value: &str, attribute_index: i64) -> Result<()>
-
-mod queries {
-    use tendermint_rpc::query::{EventType, Query};
-
-    pub fn new_block() -> Query {
-        Query::from(EventType::NewBlock)
-    }
 }

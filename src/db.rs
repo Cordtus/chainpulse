@@ -38,6 +38,24 @@ pub struct PacketRow {
     pub ibc_version: Option<String>,
 }
 
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct EventRow {
+    pub id: i64,
+    pub tx_id: i64,
+    pub event_type: String,
+    pub event_index: i64,
+    pub created_at: PrimitiveDateTime,
+}
+
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct EventAttributeRow {
+    pub id: i64,
+    pub event_id: i64,
+    pub key: String,
+    pub value: String,
+    pub attribute_index: i64,
+}
+
 pub async fn connect(path: &Path) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(path)
@@ -80,6 +98,24 @@ pub async fn create_tables(pool: &SqlitePool) {
             effected            BOOL    NOT NULL,
             effected_signer     TEXT,
             created_at          TEXT    NOT NULL
+        );
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS tx_events (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            tx_id        INTEGER NOT NULL REFERENCES txs (id),
+            event_type   TEXT    NOT NULL,
+            event_index  INTEGER NOT NULL,
+            created_at   TEXT    NOT NULL
+        );
+        "#,
+        r#"
+        CREATE TABLE IF NOT EXISTS event_attributes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id        INTEGER NOT NULL REFERENCES tx_events (id),
+            key             TEXT    NOT NULL,
+            value           TEXT    NOT NULL,
+            attribute_index INTEGER NOT NULL
         );
         "#,
     ];
@@ -125,6 +161,13 @@ async fn create_indexes(pool: &SqlitePool) {
         "CREATE        INDEX IF NOT EXISTS packets_pending_sender ON packets (sender, effected) WHERE effected = 0 AND sender IS NOT NULL;",
         "CREATE        INDEX IF NOT EXISTS packets_pending_receiver ON packets (receiver, effected) WHERE effected = 0 AND receiver IS NOT NULL;",
         "CREATE        INDEX IF NOT EXISTS packets_stuck       ON packets (src_channel, dst_channel, effected, created_at) WHERE effected = 0;",
+        // Event indexes
+        "CREATE UNIQUE INDEX IF NOT EXISTS tx_events_unique   ON tx_events (tx_id, event_type, event_index);",
+        "CREATE        INDEX IF NOT EXISTS tx_events_tx_id    ON tx_events (tx_id);",
+        "CREATE        INDEX IF NOT EXISTS tx_events_type     ON tx_events (event_type);",
+        "CREATE UNIQUE INDEX IF NOT EXISTS event_attr_unique  ON event_attributes (event_id, key, attribute_index);",
+        "CREATE        INDEX IF NOT EXISTS event_attr_event   ON event_attributes (event_id);",
+        "CREATE        INDEX IF NOT EXISTS event_attr_key     ON event_attributes (key);",
     ];
 
     for index in INDEXES {

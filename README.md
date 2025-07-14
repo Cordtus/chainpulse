@@ -8,9 +8,9 @@
 
 # Chain Pulse
 
-Monitor IBC packet flow across Cosmos blockchains. Track which packets get relayed, identify stuck packets, and analyze packet frontrunning patterns.
+ChainPulse monitors IBC packet flow across Cosmos blockchains. It tracks packet delivery, identifies stuck transfers, and provides real-time data through REST APIs.
 
-Chain Pulse stores all data in SQLite and exports metrics to Prometheus. The built-in REST API provides real-time packet queries for integration with other systems.
+ChainPulse connects to blockchain nodes via WebSocket, stores packet data in SQLite, and exports metrics to Prometheus. It supports CometBFT/Tendermint v0.34, v0.37, and v0.38 protocols.
 
 ## Installation
 
@@ -56,19 +56,21 @@ port    = 3000
 stuck_packets = true
 ```
 
-### Required Fields
-- `url`: WebSocket endpoint for the chain
-- `database.path`: Location for SQLite database
-- `metrics.enabled`: Enable Prometheus metrics and API endpoints
+### Configuration Options
 
-### Optional Fields
-- `comet_version`: Tendermint/CometBFT version (defaults to "0.34")
-- `stuck_packets`: Enable monitoring of stuck packets (defaults to true)
-- `metrics.port`: Port for metrics and API server (defaults to 3000)
+**Required:**
+- `url` - WebSocket endpoint for the chain
+- `database.path` - SQLite database location
+- `metrics.enabled` - Enable metrics and API server
+
+**Optional:**
+- `comet_version` - Protocol version: "0.34", "0.37", or "0.38" (default: "0.34")
+- `stuck_packets` - Monitor undelivered packets (default: true)
+- `metrics.port` - HTTP server port (default: 3000)
 
 ### Authentication
 
-ChainPulse supports authentication for private RPC endpoints. You can provide username and password in the configuration:
+ChainPulse supports authenticated connections to private RPC endpoints:
 
 ```toml
 [chains.private-chain]
@@ -78,12 +80,7 @@ username = "your-username"
 password = "your-password"
 ```
 
-ChainPulse implements a custom WebSocket client that supports various authentication methods:
-- **Basic Authentication**: Automatically sends credentials as Basic Auth headers during WebSocket handshake
-- **Bearer Token**: Support for Bearer token authentication (future)
-- **API Key**: Support for custom API key headers (future)
-
-This custom implementation bypasses the limitations of the standard tendermint-rpc library, which doesn't support authentication headers.
+The custom WebSocket client handles Basic Authentication during handshake. This works around standard library limitations.
 
 ### Chain References
 
@@ -133,136 +130,122 @@ $ chainpulse --config chainpulse.toml
 ...
 ```
 
-## API Endpoints
+## API Reference
 
-Chain Pulse provides REST API endpoints for querying packet data. All endpoints return JSON responses.
+ChainPulse provides REST endpoints at `http://localhost:3000/api/v1/`. All endpoints return JSON.
 
-### Query Packets by User Address
-Find all packets sent or received by a specific address:
-```
-GET /api/v1/packets/by-user?address={address}&role={role}&limit={limit}&offset={offset}
-```
+### Find Packets by User
+Track transfers sent or received by any address:
 
-Parameters:
-- `address` (required): User's blockchain address
-- `role` (optional): Filter by "sender", "receiver", or "both" (default)
-- `limit` (optional): Maximum results to return (default: 100)
-- `offset` (optional): Pagination offset (default: 0)
+```bash
+# Packets sent by address
+GET /api/v1/packets/by-user?address={address}&role=sender
 
-### Query Stuck Packets
-Find packets that have not been relayed within a time threshold:
-```
-GET /api/v1/packets/stuck?min_age_seconds={seconds}&limit={limit}
+# Packets received by address
+GET /api/v1/packets/by-user?address={address}&role=receiver
 ```
 
-Parameters:
-- `min_age_seconds` (optional): Minimum age for stuck packets (default: 900)
-- `limit` (optional): Maximum results to return (default: 100)
+**Example response:**
+```json
+{
+  "packets": [{
+    "chain_id": "osmosis-1",
+    "sequence": 892193,
+    "sender": "osmo1...",
+    "receiver": "noble1...",
+    "amount": "30371228",
+    "denom": "uusdc",
+    "age_seconds": 120
+  }]
+}
+```
+
+### Find Stuck Packets
+Identify transfers that failed to relay:
+
+```bash
+GET /api/v1/packets/stuck?min_age_seconds=3600&limit=10
+```
+
+Returns packets undelivered for the specified time. Use this to monitor relay health.
 
 ### Get Packet Details
-Retrieve detailed information about a specific packet:
-```
+Look up specific packet information:
+
+```bash
 GET /api/v1/packets/{chain}/{channel}/{sequence}
+
+# Example:
+GET /api/v1/packets/osmosis-1/channel-750/892193
 ```
 
-Path parameters:
-- `chain`: Source chain ID
-- `channel`: IBC channel
-- `sequence`: Packet sequence number
+### Check Channel Congestion
+View channels with delivery backlogs:
 
-### Get Channel Congestion
-View channels with stuck packets and their total value:
-```
+```bash
 GET /api/v1/channels/congestion
 ```
 
-Returns channels sorted by number of stuck packets, including the total value of tokens waiting to be relayed.
+Returns channels sorted by stuck packet count with total stuck value per token.
 
-## Packet Data Tracking
+## How It Works
 
-Chain Pulse tracks detailed information about IBC fungible token transfers:
+### Packet Tracking
+ChainPulse extracts data from IBC fungible token transfers:
+- Sender and receiver addresses
+- Transfer amount and token type
+- Channel routing information
+- Relay attempts and status
 
-### Data Collected
-For each IBC transfer packet, Chain Pulse extracts and stores:
-- **Sender**: Source address initiating the transfer
-- **Receiver**: Destination address receiving tokens
-- **Amount**: Token quantity being transferred
-- **Denom**: Token denomination
-- **IBC Version**: Protocol version (v1 or future v2/Eureka)
+### Stuck Detection
+Packets undelivered for 15+ minutes are marked as stuck. The monitor:
+- Checks every 60 seconds
+- Groups by channel
+- Calculates total stuck value
 
-### Stuck Packet Detection
-Chain Pulse monitors packets continuously and identifies those that remain unrelayed for more than 15 minutes. The stuck packet detector:
-- Runs every 60 seconds
-- Tracks packet age since creation
-- Groups stuck packets by channel
-- Calculates total value stuck on each channel
+### Integration Examples
 
-### Use Cases
-- **Wallet Integration**: Show users their pending IBC transfers
-- **Relayer Monitoring**: Identify channels that need attention
-- **Risk Assessment**: Track value at risk in stuck packets
-- **User Support**: Help users find missing transfers
+**Wallet Integration:**
+```javascript
+// Show pending transfers
+const pending = await fetch(`/api/v1/packets/by-user?address=${userAddress}&role=sender`);
+const transfers = await pending.json();
+```
+
+**Relay Monitoring:**
+```bash
+# Alert on congested channels
+curl /api/v1/channels/congestion | jq '.channels[] | select(.stuck_count > 100)'
+```
 
 ## Prometheus Metrics
 
-The built-in HTTP server at `/metrics` exports the following Prometheus metrics:
+Access metrics at `http://localhost:3000/metrics`.
 
-```
-# HELP ibc_effected_packets The number of IBC packets that are effected
-# TYPE ibc_effected_packets counter
-ibc_effected_packets{chain_id, src_channel, src_port, dst_channel, dst_port, signer, memo}
-```
+### Packet Flow Metrics
+- `ibc_effected_packets` - Successfully delivered packets (labeled by relayer)
+- `ibc_uneffected_packets` - Failed packet deliveries
+- `ibc_frontrun_counter` - Packets delivered by competing relayers
 
-```
-# HELP ibc_uneffected_packets The number of IBC packets that are not effected
-# TYPE ibc_uneffected_packets counter
-ibc_uneffected_packets{chain_id, src_channel, src_port, dst_channel, dst_port, signer, memo}
-```
+### Stuck Packet Metrics
+- `ibc_stuck_packets` - Count per channel
+- `ibc_stuck_packets_detailed` - Includes user data flag
+- `ibc_packet_age_seconds` - Time since packet creation
 
-```
-# HELP ibc_frontrun_counter The number of times a signer gets frontrun by the original signer
-# TYPE ibc_frontrun_counter counter
-ibc_frontrun_counter{chain_id, src_channel, src_port, dst_channel, dst_port, signer, frontrunned_by, memo, effected_memo}
+### System Health Metrics
+- `chainpulse_chains` - Active chain connections
+- `chainpulse_packets` - Total packets processed
+- `chainpulse_txs` - Total transactions processed
+- `chainpulse_errors` - Connection errors per chain
+- `chainpulse_reconnects` - WebSocket reconnection count
 
-# HELP ibc_stuck_packets The number of packets stuck on an IBC channel
-# TYPE ibc_stuck_packets gauge
-ibc_stuck_packets{dst_chain,src_chain,src_channel} 1
+### Example Prometheus Query
+```promql
+# Alert on channels with >100 stuck packets
+ibc_stuck_packets > 100
 
-# HELP ibc_stuck_packets_detailed Detailed stuck packet tracking with user info
-# TYPE ibc_stuck_packets_detailed gauge
-ibc_stuck_packets_detailed{src_chain, dst_chain, src_channel, dst_channel, has_user_data}
-
-# HELP ibc_packet_age_seconds Age of unrelayed packets in seconds
-# TYPE ibc_packet_age_seconds gauge
-ibc_packet_age_seconds{src_chain, dst_chain, channel}
-```
-
-### Internal metrics
-
-The following internal metrics are also available, for monitor Chain Pulse itself:
-
-```
-# HELP chainpulse_chains The number of chains being monitored
-# TYPE chainpulse_chains gauge
-chainpulse_chains 2
-```
-
-```
-# HELP chainpulse_packets The number of packets processed
-# TYPE chainpulse_packets counter
-chainpulse_packets{chain_id}
-```
-
-```
-# HELP chainpulse_reconnects The number of times we had to reconnect to the WebSocket
-# TYPE chainpulse_reconnects counter
-chainpulse_reconnects{chain_id}
-```
-
-```
-# HELP chainpulse_txs The number of txs processed
-# TYPE chainpulse_txs counter
-chainpulse_txs{chain_id}
+# Calculate packet delivery rate
+rate(ibc_effected_packets[5m]) / rate(chainpulse_packets[5m])
 ```
 
 ## Attribution

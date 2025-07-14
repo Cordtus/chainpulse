@@ -8,24 +8,24 @@ ibc_versions = ["v1"]  # Will become ["v1", "v2"] when IBC v2 is supported
 
 # Chains to monitor, with their chain identifier, Comet/Tendermint version, and the URL of their WebSocket endpoint.
 [chains.cosmoshub-4]
-url = "wss://neutron-rpc.lavenderfive.com/websocket"
-comet_version = "0.34"
+url = "wss://rpc.cosmos.network/websocket"
+comet_version = "0.34"  # Tendermint v0.34
 ibc_version = "v1"  # Per-chain IBC version override
 
 [chains.neutron-1]
 url = "wss://neutron-rpc.lavenderfive.com/websocket"
-comet_version = "0.34"
+comet_version = "0.37"  # CometBFT v0.37
 # ibc_version defaults to "v1" if not specified
 
 [chains.osmosis-1]
 url = "wss://rpc.osmosis.zone/websocket"
-comet_version = "0.34"
+comet_version = "0.38"  # CometBFT v0.38 (now supported!)
 
-# Future IBC v2 chain example (not implemented yet)
-# [chains.eureka-testnet-1]
-# url = "wss://eureka-rpc.example.com/websocket"
-# comet_version = "0.38"
-# ibc_version = "v2"
+# Example chain with CometBFT v0.38
+[chains.noble-1]
+url = "wss://noble-rpc.example.com/websocket"
+comet_version = "0.38"
+ibc_version = "v1"
 
 # Example chain with authentication
 # [chains.private-chain]

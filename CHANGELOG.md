@@ -2,10 +2,22 @@
 
 ## Unreleased
 
-> Nothing yet
+### Added
+- Support for CometBFT v0.38 protocol
+- REST API endpoints for querying packet data:
+  - `/api/v1/packets/by-user` - Find packets by sender or receiver address
+  - `/api/v1/packets/stuck` - Query undelivered packets
+  - `/api/v1/packets/{chain}/{channel}/{sequence}` - Get specific packet details
+  - `/api/v1/channels/congestion` - View congested channels with stuck value
+- User data extraction from IBC fungible token transfers (sender, receiver, amount, denom)
+- Enhanced stuck packet monitoring with user data tracking
+- Authentication support for private RPC endpoints (Basic Auth)
+- Chain reference system for managing credentials via `chains.json`
+- Detailed packet age metrics in Prometheus
 
-- Use a table to configure the chains instead of a list.
-  Please check out the latest [`chainpulse.toml`](./chainpulse.toml) file for the latest syntax.
+### Changed
+- Unified collector system handles all protocol versions automatically
+- Table-based chain configuration (check [`chainpulse.toml`](./chainpulse.toml) for syntax)
 
 ## v0.3.2
 

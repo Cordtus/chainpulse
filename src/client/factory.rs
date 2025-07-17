@@ -16,7 +16,7 @@ pub async fn create_client(
     auth: Option<AuthConfig>,
 ) -> Result<Box<dyn ChainClient>> {
     tracing::info!("Creating client for version {} at {}", version, ws_url);
-    
+
     match auth {
         Some(auth_config) => {
             // Authenticated connection - use custom auth client
@@ -26,7 +26,8 @@ pub async fn create_client(
                 version.to_string(),
                 auth_config.username,
                 auth_config.password,
-            ).await?;
+            )
+            .await?;
             Ok(Box::new(client))
         }
         None => {

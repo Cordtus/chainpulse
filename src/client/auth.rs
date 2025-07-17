@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use tendermint::{block::Height, Block};
 use tendermint_rpc::event::Event;
 
-use crate::simple_auth_client::{AuthMethod, SimpleAuthClient};
 use super::{BlockResults, BlockSubscription, ChainClient, Result};
+use crate::simple_auth_client::{AuthMethod, SimpleAuthClient};
 
 /// Client wrapper for authenticated connections
 pub struct AuthClient {
@@ -14,10 +14,19 @@ pub struct AuthClient {
 
 impl AuthClient {
     /// Create a new authenticated client
-    pub async fn new(url: String, version: String, username: String, password: String) -> Result<Self> {
+    pub async fn new(
+        url: String,
+        version: String,
+        username: String,
+        password: String,
+    ) -> Result<Self> {
         let auth_method = AuthMethod::Basic { username, password };
-        
-        Ok(Self { url, auth_method, version })
+
+        Ok(Self {
+            url,
+            auth_method,
+            version,
+        })
     }
 }
 
@@ -27,10 +36,10 @@ impl ChainClient for AuthClient {
         // Create a new SimpleAuthClient instance for this subscription
         let client = SimpleAuthClient::new(self.url.clone(), self.auth_method.clone());
         let mut block_stream = client.subscribe_blocks().await?;
-        
+
         // Create a channel to bridge between BlockStream and our Event stream
         let (tx, rx) = tokio::sync::mpsc::channel(100);
-        
+
         // Spawn a task to convert blocks to events
         tokio::spawn(async move {
             while let Some(block) = block_stream.next().await {
@@ -43,13 +52,13 @@ impl ChainClient for AuthClient {
                     },
                     events: None,
                 };
-                
+
                 if tx.send(Ok(event)).await.is_err() {
                     break; // Receiver dropped
                 }
             }
         });
-        
+
         // Convert receiver to stream
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Box::pin(stream))
@@ -75,4 +84,3 @@ impl ChainClient for AuthClient {
         false
     }
 }
-

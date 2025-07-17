@@ -8,9 +8,9 @@ use axum::{
     Router, Server,
 };
 use prometheus::{
-    register_int_counter_vec_with_registry, register_int_gauge_vec_with_registry, 
-    register_gauge_vec_with_registry, Encoder, GaugeVec as PrometheusGaugeVec,
-    IntCounterVec, IntGaugeVec, Registry, TextEncoder,
+    register_gauge_vec_with_registry, register_int_counter_vec_with_registry,
+    register_int_gauge_vec_with_registry, Encoder, GaugeVec as PrometheusGaugeVec, IntCounterVec,
+    IntGaugeVec, Registry, TextEncoder,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -185,7 +185,13 @@ impl Metrics {
         let ibc_stuck_packets_detailed = register_int_gauge_vec_with_registry!(
             "ibc_stuck_packets_detailed",
             "Detailed stuck packet tracking with user info",
-            &["src_chain", "dst_chain", "src_channel", "dst_channel", "has_user_data"],
+            &[
+                "src_chain",
+                "dst_chain",
+                "src_channel",
+                "dst_channel",
+                "has_user_data"
+            ],
             registry
         )
         .unwrap();
@@ -374,12 +380,15 @@ impl Metrics {
 
 pub async fn run(port: u16, registry: Registry, db: SqlitePool) -> Result<()> {
     let state = ApiState { registry, db };
-    
+
     let app = Router::new()
         .route("/metrics", get(get_metrics))
         .route("/api/v1/packets/by-user", get(get_packets_by_user))
         .route("/api/v1/packets/stuck", get(get_stuck_packets))
-        .route("/api/v1/packets/:chain/:channel/:sequence", get(get_packet_details))
+        .route(
+            "/api/v1/packets/:chain/:channel/:sequence",
+            get(get_packet_details),
+        )
         .route("/api/v1/channels/congestion", get(get_channel_congestion))
         .with_state(state);
 
@@ -525,24 +534,54 @@ async fn get_packets_by_user(
     );
 
     let packets = if params.role == "sender" || params.role == "receiver" {
-        sqlx::query_as::<_, (String, i64, String, String, Option<String>, Option<String>, 
-                           Option<String>, Option<String>, Option<String>, String, 
-                           bool, i64, i64)>(&query)
-            .bind(&params.address)
-            .bind(params.limit)
-            .bind(params.offset)
-            .fetch_all(&state.db)
-            .await
+        sqlx::query_as::<
+            _,
+            (
+                String,
+                i64,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+                bool,
+                i64,
+                i64,
+            ),
+        >(&query)
+        .bind(&params.address)
+        .bind(params.limit)
+        .bind(params.offset)
+        .fetch_all(&state.db)
+        .await
     } else {
-        sqlx::query_as::<_, (String, i64, String, String, Option<String>, Option<String>, 
-                           Option<String>, Option<String>, Option<String>, String, 
-                           bool, i64, i64)>(&query)
-            .bind(&params.address)
-            .bind(&params.address)
-            .bind(params.limit)
-            .bind(params.offset)
-            .fetch_all(&state.db)
-            .await
+        sqlx::query_as::<
+            _,
+            (
+                String,
+                i64,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+                bool,
+                i64,
+                i64,
+            ),
+        >(&query)
+        .bind(&params.address)
+        .bind(&params.address)
+        .bind(params.limit)
+        .bind(params.offset)
+        .fetch_all(&state.db)
+        .await
     };
 
     match packets {
@@ -604,13 +643,27 @@ async fn get_stuck_packets(
         LIMIT ?
     "#;
 
-    match sqlx::query_as::<_, (String, i64, String, String, Option<String>, Option<String>, 
-                             Option<String>, Option<String>, Option<String>, String, 
-                             i64, i64)>(query)
-        .bind(params.min_age_seconds)
-        .bind(params.limit)
-        .fetch_all(&state.db)
-        .await
+    match sqlx::query_as::<
+        _,
+        (
+            String,
+            i64,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            i64,
+            i64,
+        ),
+    >(query)
+    .bind(params.min_age_seconds)
+    .bind(params.limit)
+    .fetch_all(&state.db)
+    .await
     {
         Ok(rows) => {
             let packets: Vec<PacketInfo> = rows
@@ -669,14 +722,29 @@ async fn get_packet_details(
         LIMIT 1
     "#;
 
-    match sqlx::query_as::<_, (String, i64, String, String, Option<String>, Option<String>, 
-                             Option<String>, Option<String>, Option<String>, String, 
-                             bool, i64, i64)>(query)
-        .bind(chain)
-        .bind(channel)
-        .bind(sequence)
-        .fetch_one(&state.db)
-        .await
+    match sqlx::query_as::<
+        _,
+        (
+            String,
+            i64,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            bool,
+            i64,
+            i64,
+        ),
+    >(query)
+    .bind(chain)
+    .bind(channel)
+    .bind(sequence)
+    .fetch_one(&state.db)
+    .await
     {
         Ok(row) => Ok(Json(PacketInfo {
             chain_id: row.0,
@@ -725,13 +793,16 @@ async fn get_channel_congestion(
                     if let Some(amounts) = row.4 {
                         for amount_str in amounts.split(',') {
                             if let Some((denom, amount)) = amount_str.split_once(':') {
-                                    total_value.entry(denom.to_string())
-                                        .and_modify(|e: &mut String| {
-                                            if let (Ok(existing), Ok(new)) = (e.parse::<f64>(), amount.parse::<f64>()) {
-                                                *e = (existing + new).to_string();
-                                            }
-                                        })
-                                        .or_insert(amount.to_string());
+                                total_value
+                                    .entry(denom.to_string())
+                                    .and_modify(|e: &mut String| {
+                                        if let (Ok(existing), Ok(new)) =
+                                            (e.parse::<f64>(), amount.parse::<f64>())
+                                        {
+                                            *e = (existing + new).to_string();
+                                        }
+                                    })
+                                    .or_insert(amount.to_string());
                             }
                         }
                     }

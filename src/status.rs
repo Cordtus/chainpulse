@@ -22,7 +22,7 @@ pub async fn run(_chains: Chains, _metrics: Metrics) -> Result<()> {
 // This function should be called periodically to check for stuck packets
 pub async fn check_stuck_packets(db: &SqlitePool, metrics: &Metrics) -> Result<()> {
     let stuck_threshold_secs = 900; // 15 minutes
-    
+
     // Query for stuck packets with user data
     let query = r#"
         SELECT 
@@ -38,14 +38,15 @@ pub async fn check_stuck_packets(db: &SqlitePool, metrics: &Metrics) -> Result<(
           AND CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER) > ?
         GROUP BY t.chain, p.dst_channel, p.src_channel
     "#;
-    
+
     match sqlx::query_as::<_, (String, String, String, i64, i64, i64)>(query)
         .bind(stuck_threshold_secs)
         .fetch_all(db)
         .await
     {
         Ok(rows) => {
-            for (src_chain, dst_channel, src_channel, stuck_count, with_user_data, max_age) in rows {
+            for (src_chain, dst_channel, src_channel, stuck_count, with_user_data, max_age) in rows
+            {
                 // Update detailed stuck packet metrics
                 metrics.ibc_stuck_packets_detailed(
                     &src_chain,
@@ -55,7 +56,7 @@ pub async fn check_stuck_packets(db: &SqlitePool, metrics: &Metrics) -> Result<(
                     with_user_data > 0,
                     stuck_count,
                 );
-                
+
                 // Update packet age metrics
                 if max_age > 0 {
                     metrics.ibc_packet_age_unrelayed(
@@ -65,15 +66,10 @@ pub async fn check_stuck_packets(db: &SqlitePool, metrics: &Metrics) -> Result<(
                         max_age as f64,
                     );
                 }
-                
+
                 // Also update the legacy stuck packets metric
-                metrics.ibc_stuck_packets(
-                    &src_chain,
-                    &dst_channel,
-                    &src_channel,
-                    stuck_count,
-                );
-                
+                metrics.ibc_stuck_packets(&src_chain, &dst_channel, &src_channel, stuck_count);
+
                 if stuck_count > 0 {
                     info!(
                         "Found {} stuck packets on channel {} -> {} ({}s old, {} with user data)",
@@ -86,19 +82,19 @@ pub async fn check_stuck_packets(db: &SqlitePool, metrics: &Metrics) -> Result<(
             error!("Error checking for stuck packets: {}", e);
         }
     }
-    
+
     Ok(())
 }
 
-// Background task that runs periodically  
+// Background task that runs periodically
 pub async fn stuck_packet_monitor(db: SqlitePool, metrics: Metrics) -> Result<()> {
     let mut check_interval = interval(Duration::from_secs(60)); // Check every minute
-    
+
     info!("Starting stuck packet monitor");
-    
+
     loop {
         check_interval.tick().await;
-        
+
         if let Err(e) = check_stuck_packets(&db, &metrics).await {
             error!("Error in stuck packet monitor: {}", e);
         }

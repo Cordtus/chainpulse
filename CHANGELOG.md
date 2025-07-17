@@ -19,6 +19,9 @@
 - Unified collector system handles all protocol versions automatically
 - Table-based chain configuration (check [`chainpulse.toml`](./chainpulse.toml) for syntax)
 
+### Fixed
+- Neutron chain block parsing now correctly handles non-standard first transactions (e.g., oracle data)
+
 ## v0.3.2
 
 *July 26th, 2023*

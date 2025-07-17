@@ -1,11 +1,14 @@
 use async_trait::async_trait;
 use tendermint::{block::Height, Block};
 use tendermint_rpc::{
-    client::CompatMode, query::{EventType, Query}, Client, SubscriptionClient, 
-    WebSocketClient, WebSocketClientUrl,
+    client::CompatMode,
+    query::{EventType, Query},
+    Client, SubscriptionClient, WebSocketClient, WebSocketClientUrl,
 };
 
-use super::{BlockResults, BlockSubscription, ChainClient, EventAttribute, Result, TxEvent, TxResult};
+use super::{
+    BlockResults, BlockSubscription, ChainClient, EventAttribute, Result, TxEvent, TxResult,
+};
 
 /// Client for v0.34 and v0.37 protocols using tendermint-rs v0.32
 pub struct V034Client {
@@ -30,7 +33,10 @@ impl V034Client {
         // Spawn the driver
         tokio::spawn(driver.run());
 
-        Ok(Self { client, compat_mode })
+        Ok(Self {
+            client,
+            compat_mode,
+        })
     }
 }
 
@@ -51,14 +57,18 @@ impl ChainClient for V034Client {
         // Try to get block results, but handle gracefully if it fails
         match self.client.block_results(height).await {
             Ok(results) => {
-                let txs_results = results.txs_results.unwrap_or_default()
+                let txs_results = results
+                    .txs_results
+                    .unwrap_or_default()
                     .into_iter()
                     .map(|tx_result| {
-                        let events = tx_result.events
+                        let events = tx_result
+                            .events
                             .into_iter()
                             .map(|event| TxEvent {
                                 type_str: event.kind,
-                                attributes: event.attributes
+                                attributes: event
+                                    .attributes
                                     .into_iter()
                                     .map(|attr| EventAttribute {
                                         key: attr.key,
@@ -67,7 +77,7 @@ impl ChainClient for V034Client {
                                     .collect(),
                             })
                             .collect();
-                        
+
                         TxResult {
                             code: tx_result.code.value(),
                             events,

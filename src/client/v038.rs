@@ -8,10 +8,12 @@ use tendermint::{block::Height, Block};
 use tendermint_rpc::event::Event;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
-use super::{BlockResults, BlockSubscription, ChainClient, EventAttribute, Result, TxEvent, TxResult};
+use super::{
+    BlockResults, BlockSubscription, ChainClient, EventAttribute, Result, TxEvent, TxResult,
+};
 
 /// Client for v0.38 protocol with custom implementation
 pub struct V038Client {
@@ -24,7 +26,7 @@ impl V038Client {
     pub async fn new(url: String) -> Result<Self> {
         // Initialize rustls crypto provider if not already done
         let _ = rustls::crypto::ring::default_provider().install_default();
-        
+
         Ok(Self {
             url,
             request_id: Arc::new(AtomicU64::new(1)),
@@ -46,7 +48,7 @@ impl V038Client {
     /// Send JSON-RPC request and get response
     async fn request(&self, method: &str, params: Value) -> Result<Value> {
         let mut ws = self.connect().await?;
-        
+
         let request = json!({
             "jsonrpc": "2.0",
             "id": self.next_request_id(),
@@ -55,7 +57,7 @@ impl V038Client {
         });
 
         ws.send(Message::Text(request.to_string())).await?;
-        
+
         while let Some(msg) = ws.next().await {
             match msg? {
                 Message::Text(text) => {
@@ -68,7 +70,7 @@ impl V038Client {
                 _ => continue,
             }
         }
-        
+
         Err("No response received".into())
     }
 }
@@ -79,7 +81,7 @@ impl ChainClient for V038Client {
         let (tx, rx) = mpsc::channel(100);
         let url = self.url.clone();
         let request_id = self.request_id.clone();
-        
+
         // Spawn subscription handler
         tokio::spawn(async move {
             if let Err(e) = handle_subscription(url, request_id, tx).await {
@@ -96,18 +98,17 @@ impl ChainClient for V038Client {
         let params = json!({
             "height": height.to_string(),
         });
-        
+
         let result = self.request("block", params).await?;
-        
+
         // Parse v0.38 block format
-        let block_data = result.get("block")
-            .ok_or("Missing block in response")?;
-            
+        let block_data = result.get("block").ok_or("Missing block in response")?;
+
         // Convert v0.38 format to tendermint-rs v0.32 Block type
         // This requires manual conversion due to format differences
         let block_json = serde_json::to_string(block_data)?;
         let block: Block = serde_json::from_str(&block_json)?;
-        
+
         Ok(block)
     }
 
@@ -115,26 +116,26 @@ impl ChainClient for V038Client {
         let params = json!({
             "height": height.to_string(),
         });
-        
+
         let result = self.request("block_results", params).await?;
-        
+
         // Parse v0.38 block results format
-        let txs_results = result.get("txs_results")
+        let txs_results = result
+            .get("txs_results")
             .and_then(|v| v.as_array())
             .unwrap_or(&Vec::new())
             .iter()
             .map(|tx_result| {
-                let code = tx_result.get("code")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                    
-                let events = tx_result.get("events")
+                let code = tx_result.get("code").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+
+                let events = tx_result
+                    .get("events")
                     .and_then(|v| v.as_array())
                     .unwrap_or(&Vec::new())
                     .iter()
                     .map(|event| parse_v038_event(event))
                     .collect();
-                
+
                 TxResult { code, events }
             })
             .collect();
@@ -153,12 +154,14 @@ impl ChainClient for V038Client {
 
 /// Parse v0.38 event format
 fn parse_v038_event(event: &Value) -> TxEvent {
-    let type_str = event.get("type")
+    let type_str = event
+        .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-        
-    let attributes = event.get("attributes")
+
+    let attributes = event
+        .get("attributes")
         .and_then(|v| v.as_array())
         .unwrap_or(&Vec::new())
         .iter()
@@ -172,28 +175,27 @@ fn parse_v038_event(event: &Value) -> TxEvent {
                     });
                 }
             }
-            
+
             // Handle base64 encoded attributes
             if let Some(key_b64) = attr.get("key").and_then(|v| v.as_str()) {
                 if let Some(value_b64) = attr.get("value").and_then(|v| v.as_str()) {
                     // Try to decode base64
                     use base64::Engine;
                     let engine = base64::engine::general_purpose::STANDARD;
-                    if let (Ok(key_bytes), Ok(value_bytes)) = (
-                        engine.decode(key_b64),
-                        engine.decode(value_b64),
-                    ) {
+                    if let (Ok(key_bytes), Ok(value_bytes)) =
+                        (engine.decode(key_b64), engine.decode(value_b64))
+                    {
                         let key = String::from_utf8_lossy(&key_bytes).to_string();
                         let value = String::from_utf8_lossy(&value_bytes).to_string();
                         return Some(EventAttribute { key, value });
                     }
                 }
             }
-            
+
             None
         })
         .collect();
-    
+
     TxEvent {
         type_str,
         attributes,
@@ -207,7 +209,7 @@ async fn handle_subscription(
     tx: mpsc::Sender<std::result::Result<Event, tendermint_rpc::Error>>,
 ) -> Result<()> {
     let (mut ws, _) = connect_async(&url).await?;
-    
+
     // Subscribe to NewBlock events
     let id = request_id.fetch_add(1, Ordering::SeqCst);
     let subscribe_request = json!({
@@ -218,9 +220,10 @@ async fn handle_subscription(
             "query": "tm.event='NewBlock'"
         }
     });
-    
-    ws.send(Message::Text(subscribe_request.to_string())).await?;
-    
+
+    ws.send(Message::Text(subscribe_request.to_string()))
+        .await?;
+
     while let Some(msg) = ws.next().await {
         match msg? {
             Message::Text(text) => {
@@ -232,7 +235,8 @@ async fn handle_subscription(
                                 if let Some(block_json) = value.get("block") {
                                     // Try to parse the block
                                     if let Ok(block_str) = serde_json::to_string(block_json) {
-                                        if let Ok(block) = serde_json::from_str::<Block>(&block_str) {
+                                        if let Ok(block) = serde_json::from_str::<Block>(&block_str)
+                                        {
                                             // Construct Event manually
                                             let event = Event {
                                                 query: "tm.event='NewBlock'".to_string(),
@@ -256,7 +260,7 @@ async fn handle_subscription(
             _ => continue,
         }
     }
-    
+
     Ok(())
 }
 

@@ -45,7 +45,8 @@ async fn main() -> Result<()> {
 
     if config.metrics.enabled {
         tokio::spawn(
-            metrics::run(config.metrics.port, registry, pool.clone()).instrument(error_span!("metrics")),
+            metrics::run(config.metrics.port, registry, pool.clone())
+                .instrument(error_span!("metrics")),
         );
     }
 
@@ -53,7 +54,8 @@ async fn main() -> Result<()> {
         info!("Monitoring packets stuck on IBC channels");
 
         tokio::spawn(
-            status::stuck_packet_monitor(pool.clone(), metrics.clone()).instrument(error_span!("status")),
+            status::stuck_packet_monitor(pool.clone(), metrics.clone())
+                .instrument(error_span!("status")),
         );
     }
 
@@ -86,7 +88,7 @@ async fn main() -> Result<()> {
 async fn collect(chain_id: chain::Id, endpoint: Endpoint, pool: SqlitePool, metrics: Metrics) {
     // Always use the new v0.38-aware collector which handles all versions
     let version = endpoint.version_string();
-    
+
     let result = collect_unified::run(
         chain_id,
         version,

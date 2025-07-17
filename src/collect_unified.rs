@@ -9,10 +9,7 @@ use tendermint::{
     chain::{self, Id as ChainId},
     crypto::Sha256,
 };
-use tendermint_rpc::{
-    event::EventData,
-    WebSocketClientUrl,
-};
+use tendermint_rpc::{event::EventData, WebSocketClientUrl};
 use tokio::time;
 use tracing::{error, info, warn};
 
@@ -49,7 +46,9 @@ pub async fn run(
     metrics: Metrics,
 ) -> Result<()> {
     loop {
-        let task = collect(&chain_id, version, &ws_url, &username, &password, &db, &metrics);
+        let task = collect(
+            &chain_id, version, &ws_url, &username, &password, &db, &metrics,
+        );
 
         match task.await {
             Ok(outcome) => warn!("{outcome}"),
@@ -85,14 +84,14 @@ async fn collect(
     };
 
     let client = client::create_client(ws_url, version, auth_config).await?;
-    
+
     info!("Subscribing to NewBlock events...");
     let mut subscription = client.subscribe_blocks().await?;
-    
+
     info!("Waiting for new blocks...");
-    
+
     let mut count: usize = 0;
-    
+
     loop {
         let next_event = time::timeout(NEWBLOCK_TIMEOUT, subscription.next()).await;
         let next_event = match next_event {
@@ -102,13 +101,13 @@ async fn collect(
                 return Ok(Outcome::Timeout(NEWBLOCK_TIMEOUT));
             }
         };
-        
+
         count += 1;
-        
+
         let Some(Ok(event)) = next_event else {
             continue;
         };
-        
+
         let EventData::NewBlock {
             block: Some(block), ..
         } = event.data
@@ -121,11 +120,43 @@ async fn collect(
 
         info!("New block at height {}", height);
 
-        // Process transactions
-        for tx in &block.data {
-            metrics.chainpulse_txs(&chain_id_from_block);
+        // Check if this is a Neutron chain
+        let is_neutron = chain_id_from_block.as_str().starts_with("neutron");
+        let is_neutron_with_oracle = if is_neutron {
+            let min_height = if chain_id_from_block.as_str() == "neutron-testnet-1" {
+                16308954
+            } else {
+                12255559
+            };
+            height.value() >= min_height
+        } else {
+            false
+        };
 
-            let tx = Tx::decode(tx.as_slice())?;
+        // Process transactions
+        for (idx, tx) in block.data.iter().enumerate() {
+            // Skip first transaction for Neutron if it's after the oracle activation height
+            if is_neutron_with_oracle && idx == 0 {
+                tracing::debug!(
+                    "Skipping first transaction in Neutron block {} (oracle data)",
+                    height
+                );
+                continue;
+            }
+
+            // Decode as a regular Cosmos SDK transaction
+            let tx = match Tx::decode(tx.as_slice()) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    error!(
+                        "Failed to decode transaction {} in block {}: {}",
+                        idx, height, e
+                    );
+                    continue;
+                }
+            };
+
+            metrics.chainpulse_txs(&chain_id_from_block);
             let tx_row = insert_tx(db, &chain_id_from_block, height, &tx).await?;
 
             let msgs = tx.body.ok_or("missing tx body")?.messages;
@@ -138,13 +169,14 @@ async fn collect(
                         info!("    {msg}");
 
                         if msg.is_relevant() {
-                            process_msg(db, &chain_id_from_block, &tx_row, &type_url, msg, metrics).await?;
+                            process_msg(db, &chain_id_from_block, &tx_row, &type_url, msg, metrics)
+                                .await?;
                         }
                     }
                 }
             }
         }
-        
+
         // Try to get events if the client supports it and we're on v0.38
         if client.supports_events() && version == "0.38" {
             match client.get_block_results(height).await {
@@ -152,19 +184,24 @@ async fn collect(
                     // Process events for enhanced data extraction
                     for (tx_idx, tx_result) in block_results.txs_results.iter().enumerate() {
                         tracing::debug!("TX {} has {} events", tx_idx, tx_result.events.len());
-                        
+
                         for event in &tx_result.events {
-                            if event.type_str.contains("packet") || 
-                               event.type_str.contains("ibc") || 
-                               event.type_str.contains("transfer") {
-                                tracing::info!("Event: {} ({} attributes)", 
-                                    event.type_str, event.attributes.len());
-                                
+                            if event.type_str.contains("packet")
+                                || event.type_str.contains("ibc")
+                                || event.type_str.contains("transfer")
+                            {
+                                tracing::info!(
+                                    "Event: {} ({} attributes)",
+                                    event.type_str,
+                                    event.attributes.len()
+                                );
+
                                 // TODO: Store events in database when ready
                                 for attr in &event.attributes {
-                                    if attr.key.contains("packet") || 
-                                       attr.key == "sender" || 
-                                       attr.key == "receiver" {
+                                    if attr.key.contains("packet")
+                                        || attr.key == "sender"
+                                        || attr.key == "receiver"
+                                    {
                                         tracing::info!("  {}: {}", attr.key, attr.value);
                                     }
                                 }
@@ -177,7 +214,7 @@ async fn collect(
                 }
             }
         }
-        
+
         if count >= DISCONNECT_AFTER_BLOCKS {
             return Ok(Outcome::BlockElapsed(count));
         }

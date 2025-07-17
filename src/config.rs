@@ -75,18 +75,22 @@ impl Config {
             toml::from_str(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         // Load chains reference if available
-        let chains_ref_path = path.as_ref().parent()
+        let chains_ref_path = path
+            .as_ref()
+            .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("chains.json");
-        
+
         let chains_ref = if chains_ref_path.exists() {
             let chains_ref_content = fs::read_to_string(&chains_ref_path)?;
-            Some(serde_json::from_str::<ChainsReference>(&chains_ref_content)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
+            Some(
+                serde_json::from_str::<ChainsReference>(&chains_ref_content)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            )
         } else {
             None
         };
-        
+
         // Process chains, expanding references
         let mut expanded_chains = BTreeMap::new();
         for (chain_id_str, raw_endpoint) in raw_config.chains.endpoints {
@@ -100,14 +104,17 @@ impl Config {
                             "0.37" => CometVersion::V0_37,
                             _ => CometVersion::V0_34,
                         };
-                        expanded_chains.insert(chain_id_str, Endpoint {
-                            url,
-                            comet_version: comet_compat,
-                            version: chain_info.comet_version.clone(),
-                            ibc_version: raw_endpoint.ibc_version,
-                            username: Some(chain_info.username.clone()),
-                            password: Some(chain_info.password.clone()),
-                        });
+                        expanded_chains.insert(
+                            chain_id_str,
+                            Endpoint {
+                                url,
+                                comet_version: comet_compat,
+                                version: chain_info.comet_version.clone(),
+                                ibc_version: raw_endpoint.ibc_version,
+                                username: Some(chain_info.username.clone()),
+                                password: Some(chain_info.password.clone()),
+                            },
+                        );
                     } else {
                         return Err(io::Error::new(
                             io::ErrorKind::InvalidData,
@@ -117,7 +124,10 @@ impl Config {
                 } else {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        format!("Chain reference '{}' used but chains.json not found", network_name),
+                        format!(
+                            "Chain reference '{}' used but chains.json not found",
+                            network_name
+                        ),
                     ));
                 }
             } else {
@@ -127,20 +137,25 @@ impl Config {
                     "0.37" => CometVersion::V0_37,
                     _ => CometVersion::V0_34,
                 };
-                expanded_chains.insert(chain_id_str, Endpoint {
-                    url,
-                    comet_version: comet_compat,
-                    version: raw_endpoint.comet_version.clone(),
-                    ibc_version: raw_endpoint.ibc_version,
-                    username: raw_endpoint.username,
-                    password: raw_endpoint.password,
-                });
+                expanded_chains.insert(
+                    chain_id_str,
+                    Endpoint {
+                        url,
+                        comet_version: comet_compat,
+                        version: raw_endpoint.comet_version.clone(),
+                        ibc_version: raw_endpoint.ibc_version,
+                        username: raw_endpoint.username,
+                        password: raw_endpoint.password,
+                    },
+                );
             }
         }
-        
+
         Ok(Config {
             global: raw_config.global,
-            chains: Chains { endpoints: expanded_chains },
+            chains: Chains {
+                endpoints: expanded_chains,
+            },
             database: raw_config.database,
             metrics: raw_config.metrics,
         })
@@ -192,7 +207,7 @@ mod default {
     pub fn comet_version() -> CometVersion {
         CometVersion::V0_34
     }
-    
+
     pub fn comet_version_str() -> String {
         "0.34".to_string()
     }
@@ -200,11 +215,11 @@ mod default {
     pub fn stuck_packets() -> bool {
         true
     }
-    
+
     pub fn ibc_version() -> String {
         "v1".to_string()
     }
-    
+
     pub fn ibc_versions() -> Vec<String> {
         vec!["v1".to_string()]
     }

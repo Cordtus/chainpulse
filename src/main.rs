@@ -1,6 +1,5 @@
 pub mod client;
 pub mod collect;
-pub mod collect_unified;
 pub mod config;
 pub mod db;
 pub mod metrics;
@@ -89,7 +88,7 @@ async fn collect(chain_id: chain::Id, endpoint: Endpoint, pool: SqlitePool, metr
     // Always use the new v0.38-aware collector which handles all versions
     let version = endpoint.version_string();
 
-    let result = collect_unified::run(
+    let result = collect::run(
         chain_id,
         version,
         endpoint.url.clone(),

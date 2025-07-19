@@ -36,6 +36,12 @@ pub struct PacketRow {
     pub denom: Option<String>,
     pub amount: Option<String>,
     pub ibc_version: Option<String>,
+    // Timeout fields
+    pub timeout_timestamp: Option<i64>,
+    pub timeout_height_revision_number: Option<i64>,
+    pub timeout_height_revision_height: Option<i64>,
+    // Data integrity
+    pub data_hash: Option<String>,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -132,6 +138,11 @@ pub async fn create_tables(pool: &SqlitePool) {
         "ALTER TABLE packets ADD COLUMN denom TEXT;",
         "ALTER TABLE packets ADD COLUMN amount TEXT;",
         "ALTER TABLE packets ADD COLUMN ibc_version TEXT DEFAULT 'v1';",
+        // Add timeout and data integrity fields
+        "ALTER TABLE packets ADD COLUMN timeout_timestamp INTEGER;",
+        "ALTER TABLE packets ADD COLUMN timeout_height_revision_number INTEGER;",
+        "ALTER TABLE packets ADD COLUMN timeout_height_revision_height INTEGER;",
+        "ALTER TABLE packets ADD COLUMN data_hash TEXT;",
     ];
 
     for migration in MIGRATIONS {
@@ -161,6 +172,10 @@ async fn create_indexes(pool: &SqlitePool) {
         "CREATE        INDEX IF NOT EXISTS packets_pending_sender ON packets (sender, effected) WHERE effected = 0 AND sender IS NOT NULL;",
         "CREATE        INDEX IF NOT EXISTS packets_pending_receiver ON packets (receiver, effected) WHERE effected = 0 AND receiver IS NOT NULL;",
         "CREATE        INDEX IF NOT EXISTS packets_stuck       ON packets (src_channel, dst_channel, effected, created_at) WHERE effected = 0;",
+        // Indexes for timeout queries
+        "CREATE        INDEX IF NOT EXISTS packets_timeout_ts  ON packets (timeout_timestamp) WHERE timeout_timestamp IS NOT NULL;",
+        "CREATE        INDEX IF NOT EXISTS packets_timeout_pending ON packets (timeout_timestamp, effected) WHERE effected = 0 AND timeout_timestamp IS NOT NULL;",
+        "CREATE        INDEX IF NOT EXISTS packets_data_hash   ON packets (data_hash) WHERE data_hash IS NOT NULL;",
         // Event indexes
         "CREATE UNIQUE INDEX IF NOT EXISTS tx_events_unique   ON tx_events (tx_id, event_type, event_index);",
         "CREATE        INDEX IF NOT EXISTS tx_events_tx_id    ON tx_events (tx_id);",

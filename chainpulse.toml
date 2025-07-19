@@ -27,7 +27,7 @@ path = "chainpulse.db"
 enabled = true
 
 # The port to expose the metrics on, at /metrics.
-port = 3000
+port = 3001
 
 # Whether or not to monitor packets stuck on IBC channels
 # where either the source or destination chain is part of the

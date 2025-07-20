@@ -13,7 +13,7 @@ use prometheus::{
     IntGaugeVec, Registry, TextEncoder,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use tendermint::chain;
 use tracing::info;
 
@@ -70,6 +70,14 @@ pub struct Metrics {
     /// Time since packet creation for unrelayed packets
     /// Labels: ['src_chain', 'dst_chain', 'channel']
     ibc_packet_age_unrelayed: PrometheusGaugeVec,
+
+    /// Packets nearing timeout
+    /// Labels: ['src_chain', 'dst_chain', 'src_channel', 'dst_channel', 'timeout_type']
+    ibc_packets_near_timeout: GaugeVec,
+    
+    /// Time until packet timeout in seconds
+    /// Labels: ['src_chain', 'dst_chain', 'src_channel', 'dst_channel']
+    ibc_packet_timeout_seconds: PrometheusGaugeVec,
 }
 
 impl Metrics {
@@ -204,6 +212,22 @@ impl Metrics {
         )
         .unwrap();
 
+        let ibc_packets_near_timeout = register_int_gauge_vec_with_registry!(
+            "ibc_packets_near_timeout",
+            "Number of packets nearing their timeout deadline",
+            &["src_chain", "dst_chain", "src_channel", "dst_channel", "timeout_type"],
+            registry
+        )
+        .unwrap();
+        
+        let ibc_packet_timeout_seconds = register_gauge_vec_with_registry!(
+            "ibc_packet_timeout_seconds",
+            "Time until packet timeout in seconds (negative if already expired)",
+            &["src_chain", "dst_chain", "src_channel", "dst_channel"],
+            registry
+        )
+        .unwrap();
+
         (
             Self {
                 ibc_effected_packets,
@@ -218,6 +242,8 @@ impl Metrics {
                 chainpulse_errors,
                 ibc_stuck_packets_detailed,
                 ibc_packet_age_unrelayed,
+                ibc_packets_near_timeout,
+                ibc_packet_timeout_seconds,
             },
             registry,
         )
@@ -376,6 +402,33 @@ impl Metrics {
             .with_label_values(&[src_chain, dst_chain, channel])
             .set(age_seconds);
     }
+
+    pub fn ibc_packets_near_timeout(
+        &self,
+        src_chain: &str,
+        dst_chain: &str,
+        src_channel: &str,
+        dst_channel: &str,
+        timeout_type: &str,
+        count: i64,
+    ) {
+        self.ibc_packets_near_timeout
+            .with_label_values(&[src_chain, dst_chain, src_channel, dst_channel, timeout_type])
+            .set(count);
+    }
+
+    pub fn ibc_packet_timeout_seconds(
+        &self,
+        src_chain: &str,
+        dst_chain: &str,
+        src_channel: &str,
+        dst_channel: &str,
+        seconds_until_timeout: f64,
+    ) {
+        self.ibc_packet_timeout_seconds
+            .with_label_values(&[src_chain, dst_chain, src_channel, dst_channel])
+            .set(seconds_until_timeout);
+    }
 }
 
 pub async fn run(port: u16, registry: Registry, db: SqlitePool) -> Result<()> {
@@ -390,6 +443,9 @@ pub async fn run(port: u16, registry: Registry, db: SqlitePool) -> Result<()> {
             get(get_packet_details),
         )
         .route("/api/v1/channels/congestion", get(get_channel_congestion))
+        .route("/api/v1/packets/expiring", get(get_expiring_packets))
+        .route("/api/v1/packets/expired", get(get_expired_packets))
+        .route("/api/v1/packets/duplicates", get(get_duplicate_packets))
         .with_state(state);
 
     let server =
@@ -819,6 +875,296 @@ async fn get_channel_congestion(
 
             Ok(Json(ChannelCongestionResponse {
                 channels,
+                api_version: "1.0".to_string(),
+            }))
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+// Timeout-based query endpoints
+
+#[derive(Debug, Deserialize)]
+struct ExpiringPacketsQuery {
+    #[serde(default = "default_expiring_minutes")]
+    minutes: i64,
+}
+
+fn default_expiring_minutes() -> i64 {
+    60 // 1 hour default
+}
+
+#[derive(Debug, Serialize)]
+struct ExpiringPacketsResponse {
+    packets: Vec<ExpiringPacketInfo>,
+    api_version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ExpiringPacketInfo {
+    chain_id: String,
+    sequence: i64,
+    src_channel: String,
+    dst_channel: String,
+    sender: Option<String>,
+    receiver: Option<String>,
+    amount: Option<String>,
+    denom: Option<String>,
+    seconds_until_timeout: i64,
+    timeout_type: String,
+    timeout_value: String,
+}
+
+async fn get_expiring_packets(
+    State(state): State<ApiState>,
+    Query(params): Query<ExpiringPacketsQuery>,
+) -> std::result::Result<Json<ExpiringPacketsResponse>, StatusCode> {
+    let query = r#"
+        SELECT 
+            t.chain,
+            p.sequence,
+            p.src_channel,
+            p.dst_channel,
+            p.sender,
+            p.receiver,
+            p.amount,
+            p.denom,
+            p.timeout_timestamp,
+            p.timeout_height_revision_number,
+            p.timeout_height_revision_height,
+            (p.timeout_timestamp - strftime('%s', 'now') * 1000000000) / 1000000000 as seconds_until_timeout
+        FROM packets p
+        JOIN txs t ON p.tx_id = t.id
+        WHERE p.effected = 0 
+          AND p.timeout_timestamp IS NOT NULL
+          AND p.timeout_timestamp > strftime('%s', 'now') * 1000000000
+          AND p.timeout_timestamp < (strftime('%s', 'now') + ? * 60) * 1000000000
+        ORDER BY p.timeout_timestamp ASC
+        LIMIT 100
+    "#;
+
+    match sqlx::query(query)
+        .bind(params.minutes)
+        .fetch_all(&state.db)
+        .await
+    {
+        Ok(rows) => {
+            let packets = rows
+                .into_iter()
+                .map(|row| {
+                    let timeout_type = if row.get::<Option<i64>, _>(9).is_some() {
+                        "height".to_string()
+                    } else {
+                        "timestamp".to_string()
+                    };
+                    
+                    let timeout_value = if timeout_type == "height" {
+                        format!("{}-{}", 
+                            row.get::<Option<i64>, _>(9).unwrap_or(0),
+                            row.get::<Option<i64>, _>(10).unwrap_or(0)
+                        )
+                    } else {
+                        let ts = row.get::<Option<i64>, _>(8).unwrap_or(0);
+                        // Convert nanoseconds to ISO timestamp
+                        let secs = ts / 1_000_000_000;
+                        chrono::DateTime::from_timestamp(secs, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| ts.to_string())
+                    };
+
+                    ExpiringPacketInfo {
+                        chain_id: row.get(0),
+                        sequence: row.get(1),
+                        src_channel: row.get(2),
+                        dst_channel: row.get(3),
+                        sender: row.get(4),
+                        receiver: row.get(5),
+                        amount: row.get(6),
+                        denom: row.get(7),
+                        seconds_until_timeout: row.get(11),
+                        timeout_type,
+                        timeout_value,
+                    }
+                })
+                .collect();
+
+            Ok(Json(ExpiringPacketsResponse {
+                packets,
+                api_version: "1.0".to_string(),
+            }))
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ExpiredPacketsResponse {
+    packets: Vec<ExpiredPacketInfo>,
+    api_version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ExpiredPacketInfo {
+    chain_id: String,
+    sequence: i64,
+    src_channel: String,
+    dst_channel: String,
+    sender: Option<String>,
+    receiver: Option<String>,
+    amount: Option<String>,
+    denom: Option<String>,
+    seconds_since_timeout: i64,
+    timeout_type: String,
+}
+
+async fn get_expired_packets(
+    State(state): State<ApiState>,
+) -> std::result::Result<Json<ExpiredPacketsResponse>, StatusCode> {
+    let query = r#"
+        SELECT 
+            t.chain,
+            p.sequence,
+            p.src_channel,
+            p.dst_channel,
+            p.sender,
+            p.receiver,
+            p.amount,
+            p.denom,
+            p.timeout_timestamp,
+            p.timeout_height_revision_number,
+            p.timeout_height_revision_height,
+            (strftime('%s', 'now') * 1000000000 - p.timeout_timestamp) / 1000000000 as seconds_since_timeout
+        FROM packets p
+        JOIN txs t ON p.tx_id = t.id
+        WHERE p.effected = 0 
+          AND p.timeout_timestamp IS NOT NULL
+          AND p.timeout_timestamp < strftime('%s', 'now') * 1000000000
+        ORDER BY p.timeout_timestamp DESC
+        LIMIT 100
+    "#;
+
+    match sqlx::query(query)
+        .fetch_all(&state.db)
+        .await
+    {
+        Ok(rows) => {
+            let packets = rows
+                .into_iter()
+                .map(|row| {
+                    let timeout_type = if row.get::<Option<i64>, _>(9).is_some() {
+                        "height".to_string()
+                    } else {
+                        "timestamp".to_string()
+                    };
+
+                    ExpiredPacketInfo {
+                        chain_id: row.get(0),
+                        sequence: row.get(1),
+                        src_channel: row.get(2),
+                        dst_channel: row.get(3),
+                        sender: row.get(4),
+                        receiver: row.get(5),
+                        amount: row.get(6),
+                        denom: row.get(7),
+                        seconds_since_timeout: row.get(11),
+                        timeout_type,
+                    }
+                })
+                .collect();
+
+            Ok(Json(ExpiredPacketsResponse {
+                packets,
+                api_version: "1.0".to_string(),
+            }))
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct DuplicatePacketsResponse {
+    duplicates: Vec<DuplicateGroup>,
+    api_version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DuplicateGroup {
+    data_hash: String,
+    count: i64,
+    packets: Vec<DuplicatePacketInfo>,
+}
+
+#[derive(Debug, Serialize)]
+struct DuplicatePacketInfo {
+    chain_id: String,
+    sequence: i64,
+    src_channel: String,
+    sender: Option<String>,
+    created_at: String,
+}
+
+async fn get_duplicate_packets(
+    State(state): State<ApiState>,
+) -> std::result::Result<Json<DuplicatePacketsResponse>, StatusCode> {
+    // First get duplicate hashes
+    let hash_query = r#"
+        SELECT data_hash, COUNT(*) as count
+        FROM packets
+        WHERE data_hash IS NOT NULL
+        GROUP BY data_hash
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC
+        LIMIT 20
+    "#;
+
+    match sqlx::query(hash_query).fetch_all(&state.db).await {
+        Ok(hash_rows) => {
+            let mut duplicates = Vec::new();
+
+            for hash_row in hash_rows {
+                let data_hash: String = hash_row.get(0);
+                let count: i64 = hash_row.get(1);
+
+                // Get details for each duplicate
+                let detail_query = r#"
+                    SELECT 
+                        t.chain,
+                        p.sequence,
+                        p.src_channel,
+                        p.sender,
+                        p.created_at
+                    FROM packets p
+                    JOIN txs t ON p.tx_id = t.id
+                    WHERE p.data_hash = ?
+                    ORDER BY p.created_at ASC
+                "#;
+
+                if let Ok(detail_rows) = sqlx::query(detail_query)
+                    .bind(&data_hash)
+                    .fetch_all(&state.db)
+                    .await
+                {
+                    let packets = detail_rows
+                        .into_iter()
+                        .map(|row| DuplicatePacketInfo {
+                            chain_id: row.get(0),
+                            sequence: row.get(1),
+                            src_channel: row.get(2),
+                            sender: row.get(3),
+                            created_at: row.get(4),
+                        })
+                        .collect();
+
+                    duplicates.push(DuplicateGroup {
+                        data_hash,
+                        count,
+                        packets,
+                    });
+                }
+            }
+
+            Ok(Json(DuplicatePacketsResponse {
+                duplicates,
                 api_version: "1.0".to_string(),
             }))
         }

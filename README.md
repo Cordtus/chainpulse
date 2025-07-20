@@ -8,9 +8,15 @@
 
 # Chain Pulse
 
-ChainPulse monitors IBC packet flow across Cosmos blockchains. It tracks packet delivery, identifies stuck transfers, and provides real-time data through REST APIs.
+ChainPulse monitors IBC packet flow across Cosmos blockchains. It tracks packet lifecycles, identifies stuck transfers, detects timeout risks, and provides real-time data through REST APIs and Prometheus metrics.
 
-ChainPulse connects to blockchain nodes via WebSocket, stores packet data in SQLite, and exports metrics to Prometheus. It supports CometBFT/Tendermint v0.34, v0.37, and v0.38 protocols.
+**Key Features:**
+- Tracks IBC packets with full transfer details (sender, receiver, amount, denom)
+- Monitors packet timeouts and expiration
+- Detects duplicate transfers via data hashing
+- Supports CometBFT/Tendermint v0.34, v0.37, and v0.38
+- Provides REST API for querying packet data
+- Exports Prometheus metrics for monitoring
 
 ## Installation
 
@@ -81,6 +87,10 @@ password = "your-password"
 ```
 
 The custom WebSocket client handles Basic Authentication during handshake. This works around standard library limitations.
+
+### Database Migration
+
+ChainPulse v0.4.0+ includes new database fields for timeout tracking and data deduplication. The schema is automatically updated on first run. For existing installations, ChainPulse will add the required columns and indexes without data loss.
 
 ### Chain References
 
@@ -169,6 +179,24 @@ GET /api/v1/packets/stuck?min_age_seconds=3600&limit=10
 
 Returns packets undelivered for the specified time. Use this to monitor relay health.
 
+### Monitor Packet Timeouts
+Track packets approaching or past their timeout:
+
+```bash
+# Packets expiring within 60 minutes
+GET /api/v1/packets/expiring?minutes=60
+
+# Already expired packets
+GET /api/v1/packets/expired
+```
+
+### Find Duplicate Transfers
+Detect repeated packet data:
+
+```bash
+GET /api/v1/packets/duplicates
+```
+
 ### Get Packet Details
 Look up specific packet information:
 
@@ -191,17 +219,24 @@ Returns channels sorted by stuck packet count with total stuck value per token.
 ## How It Works
 
 ### Packet Tracking
-ChainPulse extracts data from IBC fungible token transfers:
+ChainPulse extracts comprehensive data from IBC transfers:
 - Sender and receiver addresses
-- Transfer amount and token type
-- Channel routing information
-- Relay attempts and status
+- Transfer amount and token denomination
+- Packet timeout (timestamp or block height)
+- SHA256 data hash for deduplication
+- Channel routing and relay status
 
-### Stuck Detection
-Packets undelivered for 15+ minutes are marked as stuck. The monitor:
-- Checks every 60 seconds
-- Groups by channel
-- Calculates total stuck value
+### Monitoring Features
+The status monitor runs every 60 seconds to detect:
+- **Stuck packets** - Undelivered for 15+ minutes
+- **Expiring packets** - Within 5 minutes of timeout
+- **Expired packets** - Already past their timeout deadline
+
+Alerts appear in logs:
+```
+URGENT: 1 packets on channel-5 -> channel-326 will timeout in 39 seconds
+EXPIRED: 4 packets on channel-0 -> channel-141 expired 1613 seconds ago
+```
 
 ### Integration Examples
 
@@ -231,6 +266,10 @@ Access metrics at `http://localhost:3000/metrics`.
 - `ibc_stuck_packets` - Count per channel
 - `ibc_stuck_packets_detailed` - Includes user data flag
 - `ibc_packet_age_seconds` - Time since packet creation
+
+### Timeout Metrics
+- `ibc_packets_near_timeout` - Packets approaching timeout deadline
+- `ibc_packet_timeout_seconds` - Time until timeout (negative if expired)
 
 ### System Health Metrics
 - `chainpulse_chains` - Active chain connections

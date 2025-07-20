@@ -16,8 +16,7 @@ use ibc_proto::{
 
 use prost::Message;
 use serde::{Deserialize, Serialize};
-
-use crate::Result;
+use sha2::{Sha256, Digest};
 
 /// IBC Fungible Token Transfer packet data structure
 /// This structure is standard across IBC v1 and will have a compatibility layer in IBC v2
@@ -51,6 +50,9 @@ pub struct UniversalPacketInfo {
 
     // Version info for future compatibility
     pub ibc_version: String, // "v1" or "v2"
+    
+    // Data integrity
+    pub data_hash: String,
 }
 
 impl UniversalPacketInfo {
@@ -70,6 +72,11 @@ impl UniversalPacketInfo {
         } else {
             (None, None, None, None, None)
         };
+        
+        // Calculate data hash for integrity and deduplication
+        let mut hasher = Sha256::new();
+        hasher.update(&packet.data);
+        let data_hash = format!("{:x}", hasher.finalize());
 
         Self {
             sequence: packet.sequence,
@@ -89,6 +96,7 @@ impl UniversalPacketInfo {
             denom,
             transfer_memo,
             ibc_version: "v1".to_string(),
+            data_hash,
         }
     }
 }
@@ -157,7 +165,7 @@ impl Msg {
         }
     }
 
-    pub fn decode(msg: Any) -> Result<Self> {
+    pub fn decode(msg: Any) -> crate::Result<Self> {
         match msg.type_url.as_str() {
             "/ibc.core.client.v1.MsgCreateClient" => MsgCreateClient::decode(msg.value.as_slice())
                 .map(Msg::CreateClient)

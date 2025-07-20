@@ -83,6 +83,102 @@ pub async fn check_stuck_packets(db: &SqlitePool, metrics: &Metrics) -> Result<(
         }
     }
 
+    // Check for packets nearing timeout
+    let timeout_query = r#"
+        SELECT 
+            t.chain as src_chain,
+            p.src_channel,
+            p.dst_channel,
+            COUNT(*) as count,
+            'timestamp' as timeout_type,
+            MIN((p.timeout_timestamp - strftime('%s', 'now') * 1000000000) / 1000000000) as min_seconds_until_timeout
+        FROM packets p
+        JOIN txs t ON p.tx_id = t.id
+        WHERE p.effected = 0 
+          AND p.timeout_timestamp IS NOT NULL
+          AND p.timeout_timestamp > strftime('%s', 'now') * 1000000000
+          AND p.timeout_timestamp < (strftime('%s', 'now') + 3600) * 1000000000
+        GROUP BY t.chain, p.src_channel, p.dst_channel
+        
+        UNION ALL
+        
+        SELECT 
+            t.chain as src_chain,
+            p.src_channel,
+            p.dst_channel,
+            COUNT(*) as count,
+            'expired' as timeout_type,
+            MAX((strftime('%s', 'now') * 1000000000 - p.timeout_timestamp) / 1000000000) as max_seconds_since_timeout
+        FROM packets p
+        JOIN txs t ON p.tx_id = t.id
+        WHERE p.effected = 0 
+          AND p.timeout_timestamp IS NOT NULL
+          AND p.timeout_timestamp < strftime('%s', 'now') * 1000000000
+        GROUP BY t.chain, p.src_channel, p.dst_channel
+    "#;
+
+    match sqlx::query_as::<_, (String, String, String, i64, String, i64)>(timeout_query)
+        .fetch_all(db)
+        .await
+    {
+        Ok(rows) => {
+            for (src_chain, src_channel, dst_channel, count, timeout_type, time_value) in rows {
+                if timeout_type == "timestamp" {
+                    // Packets nearing timeout
+                    metrics.ibc_packets_near_timeout(
+                        &src_chain,
+                        &src_chain, // Using src_chain for both src and dst for now
+                        &src_channel,
+                        &dst_channel,
+                        "timestamp",
+                        count,
+                    );
+                    
+                    metrics.ibc_packet_timeout_seconds(
+                        &src_chain,
+                        &src_chain,
+                        &src_channel,
+                        &dst_channel,
+                        time_value as f64,
+                    );
+                    
+                    if time_value < 300 { // Less than 5 minutes until timeout
+                        warn!(
+                            "URGENT: {} packets on channel {} -> {} will timeout in {} seconds",
+                            count, src_channel, dst_channel, time_value as i64
+                        );
+                    }
+                } else if timeout_type == "expired" {
+                    // Already expired packets
+                    metrics.ibc_packets_near_timeout(
+                        &src_chain,
+                        &src_chain,
+                        &src_channel,
+                        &dst_channel,
+                        "expired",
+                        count,
+                    );
+                    
+                    metrics.ibc_packet_timeout_seconds(
+                        &src_chain,
+                        &src_chain,
+                        &src_channel,
+                        &dst_channel,
+                        -(time_value as f64), // Negative to indicate expired
+                    );
+                    
+                    warn!(
+                        "EXPIRED: {} packets on channel {} -> {} expired {} seconds ago",
+                        count, src_channel, dst_channel, time_value as i64
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            error!("Error checking for timeout packets: {}", e);
+        }
+    }
+
     Ok(())
 }
 

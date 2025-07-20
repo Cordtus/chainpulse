@@ -4,16 +4,26 @@
 
 ### Added
 - Support for CometBFT v0.38 protocol
-- REST API endpoints for querying packet data:
+- Comprehensive IBC packet data extraction:
+  - Packet timeout tracking (timestamp and block height)
+  - SHA256 data hash for duplicate detection
+  - Complete transfer details (sender, receiver, amount, denom)
+- Enhanced REST API endpoints:
   - `/api/v1/packets/by-user` - Find packets by sender or receiver address
   - `/api/v1/packets/stuck` - Query undelivered packets
   - `/api/v1/packets/{chain}/{channel}/{sequence}` - Get specific packet details
   - `/api/v1/channels/congestion` - View congested channels with stuck value
-- User data extraction from IBC fungible token transfers (sender, receiver, amount, denom)
-- Enhanced stuck packet monitoring with user data tracking
+  - `/api/v1/packets/expiring` - Find packets approaching timeout
+  - `/api/v1/packets/expired` - Query already expired packets
+  - `/api/v1/packets/duplicates` - Detect duplicate transfers
+- New Prometheus metrics:
+  - `ibc_packets_near_timeout` - Packets approaching timeout deadline
+  - `ibc_packet_timeout_seconds` - Time until packet timeout (negative if expired)
+- Automatic timeout monitoring with URGENT and EXPIRED alerts
+- Enhanced stuck packet detection with user data tracking
 - Authentication support for private RPC endpoints (Basic Auth)
 - Chain reference system for managing credentials via `chains.json`
-- Detailed packet age metrics in Prometheus
+- Database schema auto-migration for existing installations
 
 ### Changed
 - Unified collector system handles all protocol versions automatically

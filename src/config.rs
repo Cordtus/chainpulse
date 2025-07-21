@@ -196,9 +196,6 @@ pub struct Metrics {
 
     #[serde(default)]
     pub populate_on_start: bool,
-
-    #[serde(default = "crate::config::default::stuck_packets")]
-    pub stuck_packets: bool,
 }
 
 mod default {
@@ -212,9 +209,6 @@ mod default {
         "0.34".to_string()
     }
 
-    pub fn stuck_packets() -> bool {
-        true
-    }
 
     pub fn ibc_version() -> String {
         "v1".to_string()

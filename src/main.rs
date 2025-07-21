@@ -6,7 +6,6 @@ pub mod metrics;
 pub mod msg;
 pub mod populate;
 pub mod simple_auth_client;
-pub mod status;
 
 use std::path::PathBuf;
 
@@ -49,14 +48,6 @@ async fn main() -> Result<()> {
         );
     }
 
-    if config.metrics.stuck_packets {
-        info!("Monitoring packets stuck on IBC channels");
-
-        tokio::spawn(
-            status::stuck_packet_monitor(pool.clone(), metrics.clone())
-                .instrument(error_span!("status")),
-        );
-    }
 
     if config.metrics.enabled && config.metrics.populate_on_start {
         info!("Populating metrics on start");

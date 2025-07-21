@@ -4,23 +4,22 @@
 
 ### Added
 - Support for CometBFT v0.38 protocol
+- Enhanced IBC packet lifecycle tracking:
+  - MsgTransfer message tracking for transfer initiation
+  - Event-based packet tracking for all protocol versions (send_packet, acknowledge_packet, timeout_packet)
+  - Complete packet flow correlation from send to acknowledgement
 - Comprehensive IBC packet data extraction:
   - Packet timeout tracking (timestamp and block height)
   - SHA256 data hash for duplicate detection
   - Complete transfer details (sender, receiver, amount, denom)
-- Enhanced REST API endpoints:
+- REST API endpoints:
   - `/api/v1/packets/by-user` - Find packets by sender or receiver address
-  - `/api/v1/packets/stuck` - Query undelivered packets
+  - `/api/v1/packets/stuck` - Query stuck packets based on send_packet events
+  - `/api/v1/channels/congestion` - View channels with stuck packets
   - `/api/v1/packets/{chain}/{channel}/{sequence}` - Get specific packet details
-  - `/api/v1/channels/congestion` - View congested channels with stuck value
-  - `/api/v1/packets/expiring` - Find packets approaching timeout
-  - `/api/v1/packets/expired` - Query already expired packets
-  - `/api/v1/packets/duplicates` - Detect duplicate transfers
 - New Prometheus metrics:
   - `ibc_packets_near_timeout` - Packets approaching timeout deadline
   - `ibc_packet_timeout_seconds` - Time until packet timeout (negative if expired)
-- Automatic timeout monitoring with URGENT and EXPIRED alerts
-- Enhanced stuck packet detection with user data tracking
 - Authentication support for private RPC endpoints (Basic Auth)
 - Chain reference system for managing credentials via `chains.json`
 - Database schema auto-migration for existing installations
@@ -28,6 +27,14 @@
 ### Changed
 - Unified collector system handles all protocol versions automatically
 - Table-based chain configuration (check [`chainpulse.toml`](./chainpulse.toml) for syntax)
+- Improved packet tracking accuracy through event processing
+- Event-based stuck packet detection now works for all protocol versions (v0.34, v0.37, v0.38), not just v0.38
+
+### Removed
+- Removed old stuck packet implementation
+- Removed `/api/v1/packets/expiring`, `/api/v1/packets/expired`, `/api/v1/packets/duplicates` endpoints
+- Removed `stuck_packets` configuration option
+- Removed stuck packet metrics (`ibc_stuck_packets`, `ibc_stuck_packets_detailed`)
 
 ### Fixed
 - Neutron chain block parsing now correctly handles non-standard first transactions (e.g., oracle data)

@@ -36,9 +36,6 @@ pub struct Metrics {
     /// Labels: ['chain_id', 'src_channel', 'src_port', 'dst_channel', 'dst_port', 'signer', 'frontrunned_by', 'memo', 'effected_memo']
     ibc_frontrun_counter: CounterVec,
 
-    /// The number of stuck packets on an IBC channel
-    /// Labels: ['src_chain', 'dst_chain', 'src_channel']
-    ibc_stuck_packets: GaugeVec,
 
     /// The number of chains being monitored
     chainpulse_chains: GaugeVec,
@@ -63,9 +60,6 @@ pub struct Metrics {
     /// Labels: ['chain_id']
     chainpulse_errors: CounterVec,
 
-    /// Detailed stuck packet tracking with user info
-    /// Labels: ['src_chain', 'dst_chain', 'src_channel', 'dst_channel', 'has_user_data']
-    ibc_stuck_packets_detailed: GaugeVec,
 
     /// Time since packet creation for unrelayed packets
     /// Labels: ['src_chain', 'dst_chain', 'channel']
@@ -134,13 +128,6 @@ impl Metrics {
         )
         .unwrap();
 
-        let ibc_stuck_packets = register_int_gauge_vec_with_registry!(
-            "ibc_stuck_packets",
-            "The number of packets stuck on an IBC channel",
-            &["src_chain", "dst_chain", "src_channel"],
-            registry
-        )
-        .unwrap();
 
         let chainpulse_chains = register_int_gauge_vec_with_registry!(
             "chainpulse_chains",
@@ -190,19 +177,6 @@ impl Metrics {
         )
         .unwrap();
 
-        let ibc_stuck_packets_detailed = register_int_gauge_vec_with_registry!(
-            "ibc_stuck_packets_detailed",
-            "Detailed stuck packet tracking with user info",
-            &[
-                "src_chain",
-                "dst_chain",
-                "src_channel",
-                "dst_channel",
-                "has_user_data"
-            ],
-            registry
-        )
-        .unwrap();
 
         let ibc_packet_age_unrelayed = register_gauge_vec_with_registry!(
             "ibc_packet_age_seconds",
@@ -233,14 +207,12 @@ impl Metrics {
                 ibc_effected_packets,
                 ibc_uneffected_packets,
                 ibc_frontrun_counter,
-                ibc_stuck_packets,
                 chainpulse_chains,
                 chainpulse_txs,
                 chainpulse_packets,
                 chainpulse_reconnects,
                 chainpulse_timeouts,
                 chainpulse_errors,
-                ibc_stuck_packets_detailed,
                 ibc_packet_age_unrelayed,
                 ibc_packets_near_timeout,
                 ibc_packet_timeout_seconds,
@@ -325,18 +297,6 @@ impl Metrics {
             .inc();
     }
 
-    pub fn ibc_stuck_packets(
-        &self,
-        src_chain: &str,
-        dst_chain: &str,
-        src_channel: &str,
-        value: i64,
-    ) {
-        self.ibc_stuck_packets
-            .with_label_values(&[src_chain, dst_chain, src_channel])
-            .set(value);
-    }
-
     pub fn chainpulse_chains(&self) {
         self.chainpulse_chains.with_label_values(&[]).inc();
     }
@@ -369,26 +329,6 @@ impl Metrics {
         self.chainpulse_errors
             .with_label_values(&[chain_id.as_ref()])
             .inc();
-    }
-
-    pub fn ibc_stuck_packets_detailed(
-        &self,
-        src_chain: &str,
-        dst_chain: &str,
-        src_channel: &str,
-        dst_channel: &str,
-        has_user_data: bool,
-        value: i64,
-    ) {
-        self.ibc_stuck_packets_detailed
-            .with_label_values(&[
-                src_chain,
-                dst_chain,
-                src_channel,
-                dst_channel,
-                if has_user_data { "true" } else { "false" },
-            ])
-            .set(value);
     }
 
     pub fn ibc_packet_age_unrelayed(
@@ -443,9 +383,6 @@ pub async fn run(port: u16, registry: Registry, db: SqlitePool) -> Result<()> {
             get(get_packet_details),
         )
         .route("/api/v1/channels/congestion", get(get_channel_congestion))
-        .route("/api/v1/packets/expiring", get(get_expiring_packets))
-        .route("/api/v1/packets/expired", get(get_expired_packets))
-        .route("/api/v1/packets/duplicates", get(get_duplicate_packets))
         .with_state(state);
 
     let server =
@@ -489,11 +426,60 @@ fn default_limit() -> i64 {
     100
 }
 
+#[derive(Debug, Deserialize)]
+struct StuckPacketsQuery {
+    #[serde(default = "default_min_age")]
+    min_age_seconds: i64,
+    #[serde(default = "default_limit")]
+    limit: i64,
+}
+
+fn default_min_age() -> i64 {
+    900 // 15 minutes default
+}
+
+#[derive(Debug, Serialize)]
+struct StuckPacketsResponse {
+    packets: Vec<StuckPacketInfo>,
+    total: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct StuckPacketInfo {
+    chain_id: String,
+    sequence: i64,
+    src_channel: String,
+    dst_channel: String,
+    sender: Option<String>,
+    receiver: Option<String>,
+    amount: Option<String>,
+    denom: Option<String>,
+    age_seconds: i64,
+    timeout_timestamp: Option<i64>,
+    seconds_until_timeout: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 struct UserPacketsResponse {
     packets: Vec<PacketInfo>,
     total: i64,
     api_version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ChannelCongestionResponse {
+    channels: Vec<ChannelCongestion>,
+    total_stuck: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ChannelCongestion {
+    chain_id: String,
+    src_channel: String,
+    dst_channel: String,
+    stuck_count: i64,
+    oldest_age_seconds: i64,
+    total_value: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -510,40 +496,6 @@ struct PacketInfo {
     relay_attempts: i64,
     last_attempt_by: Option<String>,
     ibc_version: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct StuckPacketsQuery {
-    #[serde(default = "default_min_age")]
-    min_age_seconds: i64,
-    #[serde(default = "default_limit")]
-    limit: i64,
-}
-
-fn default_min_age() -> i64 {
-    900 // 15 minutes
-}
-
-#[derive(Debug, Serialize)]
-struct StuckPacketsResponse {
-    packets: Vec<PacketInfo>,
-    total: i64,
-    api_version: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ChannelCongestionResponse {
-    channels: Vec<ChannelCongestion>,
-    api_version: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ChannelCongestion {
-    src_channel: String,
-    dst_channel: String,
-    stuck_count: i64,
-    oldest_stuck_age_seconds: Option<i64>,
-    total_value: HashMap<String, String>,
 }
 
 // API Handlers
@@ -672,86 +624,6 @@ async fn get_packets_by_user(
     }
 }
 
-async fn get_stuck_packets(
-    State(state): State<ApiState>,
-    Query(params): Query<StuckPacketsQuery>,
-) -> std::result::Result<Json<StuckPacketsResponse>, StatusCode> {
-    let query = r#"
-        SELECT 
-            t.chain as chain_id,
-            p.sequence,
-            p.src_channel,
-            p.dst_channel,
-            p.sender,
-            p.receiver,
-            p.amount,
-            p.denom,
-            p.ibc_version,
-            p.signer as last_attempt_by,
-            CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER) as age_seconds,
-            (SELECT COUNT(*) FROM packets p2 WHERE p2.src_channel = p.src_channel 
-             AND p2.dst_channel = p.dst_channel AND p2.sequence = p.sequence) as relay_attempts
-        FROM packets p
-        JOIN txs t ON p.tx_id = t.id
-        WHERE p.effected = 0 
-          AND CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER) > ?
-        ORDER BY p.created_at ASC
-        LIMIT ?
-    "#;
-
-    match sqlx::query_as::<
-        _,
-        (
-            String,
-            i64,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-            i64,
-            i64,
-        ),
-    >(query)
-    .bind(params.min_age_seconds)
-    .bind(params.limit)
-    .fetch_all(&state.db)
-    .await
-    {
-        Ok(rows) => {
-            let packets: Vec<PacketInfo> = rows
-                .into_iter()
-                .map(|row| PacketInfo {
-                    chain_id: row.0,
-                    sequence: row.1,
-                    src_channel: row.2,
-                    dst_channel: row.3,
-                    sender: row.4,
-                    receiver: row.5,
-                    amount: row.6,
-                    denom: row.7,
-                    ibc_version: row.8.unwrap_or_else(|| "v1".to_string()),
-                    last_attempt_by: Some(row.9),
-                    age_seconds: row.10,
-                    relay_attempts: row.11,
-                })
-                .collect();
-
-            let total = packets.len() as i64;
-
-            Ok(Json(StuckPacketsResponse {
-                packets,
-                total,
-                api_version: "1.0".to_string(),
-            }))
-        }
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
 async fn get_packet_details(
     State(state): State<ApiState>,
     Path((chain, channel, sequence)): Path<(String, String, i64)>,
@@ -820,62 +692,156 @@ async fn get_packet_details(
     }
 }
 
+async fn get_stuck_packets(
+    State(state): State<ApiState>,
+    Query(params): Query<StuckPacketsQuery>,
+) -> std::result::Result<Json<StuckPacketsResponse>, StatusCode> {
+    // Query for send_packet events that haven't been acknowledged or timed out
+    let query = r#"
+        SELECT 
+            t.chain as chain_id,
+            p.sequence,
+            p.src_channel,
+            p.dst_channel,
+            p.sender,
+            p.receiver,
+            p.amount,
+            p.denom,
+            p.timeout_timestamp,
+            CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER) as age_seconds,
+            CASE 
+                WHEN p.timeout_timestamp IS NOT NULL 
+                THEN CAST((p.timeout_timestamp / 1000000000 - strftime('%s', 'now')) AS INTEGER)
+                ELSE NULL 
+            END as seconds_until_timeout
+        FROM packets p
+        JOIN txs t ON p.tx_id = t.id
+        WHERE p.msg_type_url = 'send_packet'
+          AND p.effected = 0
+          AND CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER) > ?
+          AND (p.timeout_timestamp IS NULL OR p.timeout_timestamp > strftime('%s', 'now') * 1000000000)
+        ORDER BY p.created_at ASC
+        LIMIT ?
+    "#;
+    
+    match sqlx::query_as::<
+        _,
+        (
+            String,
+            i64,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            i64,
+            Option<i64>,
+        ),
+    >(query)
+    .bind(params.min_age_seconds)
+    .bind(params.limit)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => {
+            let packets: Vec<StuckPacketInfo> = rows
+                .into_iter()
+                .map(|row| StuckPacketInfo {
+                    chain_id: row.0,
+                    sequence: row.1,
+                    src_channel: row.2,
+                    dst_channel: row.3,
+                    sender: row.4,
+                    receiver: row.5,
+                    amount: row.6,
+                    denom: row.7,
+                    timeout_timestamp: row.8,
+                    age_seconds: row.9,
+                    seconds_until_timeout: row.10,
+                })
+                .collect();
+            
+            let total = packets.len() as i64;
+            
+            Ok(Json(StuckPacketsResponse { packets, total }))
+        }
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
 async fn get_channel_congestion(
     State(state): State<ApiState>,
 ) -> std::result::Result<Json<ChannelCongestionResponse>, StatusCode> {
+    // Query for channels with stuck packets
     let query = r#"
         SELECT 
+            t.chain as chain_id,
             p.src_channel,
             p.dst_channel,
             COUNT(*) as stuck_count,
-            MIN(CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER)) as oldest_stuck_age,
-            GROUP_CONCAT(DISTINCT p.denom || ':' || p.amount) as amounts
+            MIN(CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER)) as oldest_age_seconds,
+            GROUP_CONCAT(
+                CASE 
+                    WHEN p.denom IS NOT NULL AND p.amount IS NOT NULL 
+                    THEN p.denom || ':' || p.amount 
+                    ELSE NULL 
+                END
+            ) as amounts
         FROM packets p
-        WHERE p.effected = 0 
+        JOIN txs t ON p.tx_id = t.id
+        WHERE p.msg_type_url = 'send_packet'
+          AND p.effected = 0
           AND CAST((strftime('%s', 'now') - strftime('%s', p.created_at)) AS INTEGER) > 900
-        GROUP BY p.src_channel, p.dst_channel
+          AND (p.timeout_timestamp IS NULL OR p.timeout_timestamp > strftime('%s', 'now') * 1000000000)
+        GROUP BY t.chain, p.src_channel, p.dst_channel
         ORDER BY stuck_count DESC
+        LIMIT 100
     "#;
-
-    match sqlx::query_as::<_, (String, String, i64, Option<i64>, Option<String>)>(query)
+    
+    match sqlx::query_as::<_, (String, String, String, i64, i64, Option<String>)>(query)
         .fetch_all(&state.db)
         .await
     {
         Ok(rows) => {
+            let mut total_stuck = 0i64;
             let channels: Vec<ChannelCongestion> = rows
                 .into_iter()
                 .map(|row| {
                     let mut total_value = HashMap::new();
-                    if let Some(amounts) = row.4 {
-                        for amount_str in amounts.split(',') {
-                            if let Some((denom, amount)) = amount_str.split_once(':') {
+                    if let Some(amounts_str) = row.5 {
+                        // Parse the concatenated amounts
+                        for amount_pair in amounts_str.split(',') {
+                            if let Some((denom, amount)) = amount_pair.split_once(':') {
                                 total_value
                                     .entry(denom.to_string())
                                     .and_modify(|e: &mut String| {
-                                        if let (Ok(existing), Ok(new)) =
-                                            (e.parse::<f64>(), amount.parse::<f64>())
-                                        {
+                                        if let (Ok(existing), Ok(new)) = (e.parse::<u128>(), amount.parse::<u128>()) {
                                             *e = (existing + new).to_string();
                                         }
                                     })
-                                    .or_insert(amount.to_string());
+                                    .or_insert_with(|| amount.to_string());
                             }
                         }
                     }
-
+                    
+                    total_stuck += row.3;
+                    
                     ChannelCongestion {
-                        src_channel: row.0,
-                        dst_channel: row.1,
-                        stuck_count: row.2,
-                        oldest_stuck_age_seconds: row.3,
+                        chain_id: row.0,
+                        src_channel: row.1,
+                        dst_channel: row.2,
+                        stuck_count: row.3,
+                        oldest_age_seconds: row.4,
                         total_value,
                     }
                 })
                 .collect();
-
+            
             Ok(Json(ChannelCongestionResponse {
                 channels,
-                api_version: "1.0".to_string(),
+                total_stuck,
             }))
         }
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),

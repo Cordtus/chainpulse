@@ -137,7 +137,7 @@ impl Msg {
     pub fn is_relevant(&self) -> bool {
         matches!(
             self,
-            Self::RecvPacket(_) | Self::Acknowledgement(_) | Self::Timeout(_)
+            Self::RecvPacket(_) | Self::Acknowledgement(_) | Self::Timeout(_) | Self::Transfer(_)
         )
     }
 
@@ -161,6 +161,15 @@ impl Msg {
             Self::ChanOpenTry(msg) => Some(&msg.signer),
             Self::ChanOpenAck(msg) => Some(&msg.signer),
             Self::ChanOpenConfirm(msg) => Some(&msg.signer),
+            Self::Transfer(msg) => Some(&msg.sender),
+            _ => None,
+        }
+    }
+    
+    /// Get transfer details from MsgTransfer
+    pub fn transfer(&self) -> Option<&MsgTransfer> {
+        match self {
+            Self::Transfer(msg) => Some(msg),
             _ => None,
         }
     }

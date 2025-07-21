@@ -37,4 +37,3 @@ path = "chainpulse.db"
 enabled = true
 port = 3003
 populate_on_start = false
-stuck_packets = true

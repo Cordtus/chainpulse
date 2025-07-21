@@ -8,14 +8,15 @@
 
 # Chain Pulse
 
-ChainPulse monitors IBC packet flow across Cosmos blockchains. It tracks packet lifecycles, identifies stuck transfers, detects timeout risks, and provides real-time data through REST APIs and Prometheus metrics.
+ChainPulse monitors IBC packet flow across Cosmos blockchains. It tracks packet lifecycles, detects timeout risks, and provides real-time data through REST APIs and Prometheus metrics.
 
 **Key Features:**
-- Tracks IBC packets with full transfer details (sender, receiver, amount, denom)
-- Monitors packet timeouts and expiration
-- Detects duplicate transfers via data hashing
+- Tracks complete IBC packet lifecycle including sends, receives, acknowledgements, and timeouts
+- Captures full transfer details (sender, receiver, amount, denom) from packet data
+- Monitors packet timeouts and expiration risks
+- Supports event-based tracking for v0.38 chains (enhanced packet correlation)
 - Supports CometBFT/Tendermint v0.34, v0.37, and v0.38
-- Provides REST API for querying packet data
+- Provides REST API for querying packet data by user address
 - Exports Prometheus metrics for monitoring
 
 ## Installation
@@ -58,8 +59,6 @@ path = "data.db"
 enabled = true
 port    = 3000
 
-# Monitor packets that stay unrelayed for too long
-stuck_packets = true
 ```
 
 ### Configuration Options
@@ -71,7 +70,6 @@ stuck_packets = true
 
 **Optional:**
 - `comet_version` - Protocol version: "0.34", "0.37", or "0.38" (default: "0.34")
-- `stuck_packets` - Monitor undelivered packets (default: true)
 - `metrics.port` - HTTP server port (default: 3000)
 
 ### Authentication
@@ -171,31 +169,26 @@ GET /api/v1/packets/by-user?address={address}&role=receiver
 ```
 
 ### Find Stuck Packets
-Identify transfers that failed to relay:
+Identify packets that haven't been acknowledged or timed out:
 
 ```bash
-GET /api/v1/packets/stuck?min_age_seconds=3600&limit=10
+GET /api/v1/packets/stuck?min_age_seconds=900&limit=50
 ```
 
-Returns packets undelivered for the specified time. Use this to monitor relay health.
+Returns send_packet events that are:
+- Still unacknowledged (effected = 0)
+- Older than the specified age
+- Haven't reached their timeout deadline
 
-### Monitor Packet Timeouts
-Track packets approaching or past their timeout:
+
+### Check Channel Congestion
+View channels with the most stuck packets:
 
 ```bash
-# Packets expiring within 60 minutes
-GET /api/v1/packets/expiring?minutes=60
-
-# Already expired packets
-GET /api/v1/packets/expired
+GET /api/v1/channels/congestion
 ```
 
-### Find Duplicate Transfers
-Detect repeated packet data:
-
-```bash
-GET /api/v1/packets/duplicates
-```
+Returns channels sorted by stuck packet count with aggregated token values.
 
 ### Get Packet Details
 Look up specific packet information:
@@ -207,36 +200,29 @@ GET /api/v1/packets/{chain}/{channel}/{sequence}
 GET /api/v1/packets/osmosis-1/channel-750/892193
 ```
 
-### Check Channel Congestion
-View channels with delivery backlogs:
-
-```bash
-GET /api/v1/channels/congestion
-```
-
-Returns channels sorted by stuck packet count with total stuck value per token.
 
 ## How It Works
 
 ### Packet Tracking
-ChainPulse extracts comprehensive data from IBC transfers:
+ChainPulse monitors the complete IBC packet lifecycle:
+
+**For v0.34/v0.37 chains:**
+- Tracks MsgRecvPacket (destination chain receives)
+- Tracks MsgAcknowledgement (source chain confirms)
+- Tracks MsgTimeout (packet times out)
+- Tracks MsgTransfer (transfer initiation)
+
+**For v0.38 chains (enhanced):**
+- Captures send_packet events with sequence numbers
+- Correlates acknowledgements with original sends
+- Enables accurate packet flow tracking from source chain
+
+**Extracted Data:**
 - Sender and receiver addresses
 - Transfer amount and token denomination
 - Packet timeout (timestamp or block height)
 - SHA256 data hash for deduplication
 - Channel routing and relay status
-
-### Monitoring Features
-The status monitor runs every 60 seconds to detect:
-- **Stuck packets** - Undelivered for 15+ minutes
-- **Expiring packets** - Within 5 minutes of timeout
-- **Expired packets** - Already past their timeout deadline
-
-Alerts appear in logs:
-```
-URGENT: 1 packets on channel-5 -> channel-326 will timeout in 39 seconds
-EXPIRED: 4 packets on channel-0 -> channel-141 expired 1613 seconds ago
-```
 
 ### Integration Examples
 
@@ -247,11 +233,6 @@ const pending = await fetch(`/api/v1/packets/by-user?address=${userAddress}&role
 const transfers = await pending.json();
 ```
 
-**Relay Monitoring:**
-```bash
-# Alert on congested channels
-curl /api/v1/channels/congestion | jq '.channels[] | select(.stuck_count > 100)'
-```
 
 ## Prometheus Metrics
 
@@ -261,11 +242,6 @@ Access metrics at `http://localhost:3000/metrics`.
 - `ibc_effected_packets` - Successfully delivered packets (labeled by relayer)
 - `ibc_uneffected_packets` - Failed packet deliveries
 - `ibc_frontrun_counter` - Packets delivered by competing relayers
-
-### Stuck Packet Metrics
-- `ibc_stuck_packets` - Count per channel
-- `ibc_stuck_packets_detailed` - Includes user data flag
-- `ibc_packet_age_seconds` - Time since packet creation
 
 ### Timeout Metrics
 - `ibc_packets_near_timeout` - Packets approaching timeout deadline
@@ -280,8 +256,8 @@ Access metrics at `http://localhost:3000/metrics`.
 
 ### Example Prometheus Query
 ```promql
-# Alert on channels with >100 stuck packets
-ibc_stuck_packets > 100
+# Alert on high frontrunning activity
+rate(ibc_frontrun_counter[5m]) > 0.1
 
 # Calculate packet delivery rate
 rate(ibc_effected_packets[5m]) / rate(chainpulse_packets[5m])
